@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Доступ разрешён · RDP-Token{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Ожидание RDP</h1>
+  {% if targets %}
+  <p>Окно подключения и автоматических повторов: <strong id="countdown">{{ claim_seconds }}</strong> секунд с момента разрешения доступа.</p>
+  <div class="opened-list">
+    {% for target in targets %}
+    <div class="opened-row"><div><strong>{{ target.name }}</strong><small>{{ public_host }}:{{ target.gateway_port }}</small></div><a class="button primary" href="{{ url_for('download_rdp', target_id=target.id) }}">Скачать .rdp</a></div>
+    {% endfor %}
+  </div>
+  <p class="token-ok">✓ Повторы разрешены с того же IP до конца окна, по одному соединению к системе одновременно.</p>
+  <p>Повторы не продлевают окно. Уже установленный RDP продолжит работать после его окончания — страницу можно закрыть. Для нового подключения после окончания окна разреши доступ заново. Извлечение токена пока не отключает установленный RDP.</p>
+  {% else %}<p class="empty">Ни одна система не выбрана.</p>{% endif %}
+</section>
+{% if targets %}
+<script>
+let left={{ claim_seconds }};
+const counter=document.getElementById('countdown');
+setInterval(()=>{if(left>0){left--;counter.textContent=left;}},1000);
+</script>
+{% endif %}
+{% endblock %}

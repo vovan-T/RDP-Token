@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Подключения · RDP-Token{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="heading-row">
+    <div><h1>Доступные рабочие места</h1><p class="muted">Токен: {{ token.label }}</p></div>
+    <span class="role role-{{ token.role|lower }}">{{ token.role }}</span>
+  </div>
+  {% if targets %}
+  <form method="post" action="{{ url_for('open_access') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="target-list">
+      {% for target in targets %}
+      <label class="target-row">
+        <input type="checkbox" name="target" value="{{ target.id }}">
+        <span><strong>{{ target.name }}</strong><small>{{ target.internal_ip }}:{{ target.internal_port }} → порт {{ target.gateway_port }}</small></span>
+      </label>
+      {% endfor %}
+    </div>
+    <button class="button primary" type="submit">Разрешить выбранные</button>
+  </form>
+  {% else %}<p class="empty">Для этого токена системы пока не назначены.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Последние соединения</h2>
+  <div class="table-wrap"><table><thead><tr><th>Система</th><th>Адрес</th><th>Состояние</th><th>Начало</th><th>Окончание</th></tr></thead><tbody>
+  {% for row in recent %}<tr><td>{{ row.name }}</td><td>{{ row.source_ip }}</td><td><span class="state">{{ row.state }}</span></td><td>{{ row.started_at }}</td><td>{{ row.ended_at or '—' }}</td></tr>
+  {% else %}<tr><td colspan="5" class="empty">Соединений ещё не было.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

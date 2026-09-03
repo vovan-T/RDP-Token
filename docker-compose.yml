@@ -1,0 +1,61 @@
+services:
+  app:
+    build: .
+    container_name: rdp-token-app
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      RDP_TOKEN_DB: /data/rdp-token.db
+      RDP_TOKEN_HTTP_HOST: 127.0.0.1
+      RDP_TOKEN_HTTP_PORT: ${RDP_TOKEN_APP_PORT:-18081}
+      RDP_TOKEN_SECRET: ${RDP_TOKEN_SECRET}
+      RDP_TOKEN_BOOTSTRAP_ADMIN_SERIAL: ${RDP_TOKEN_BOOTSTRAP_ADMIN_SERIAL}
+      RDP_TOKEN_CA_FILE: /certs/client-ca.pem
+      RDP_TOKEN_CRL_FILE: /certs/client.crl.pem
+      RDP_TOKEN_CLAIM_SECONDS: ${RDP_TOKEN_CLAIM_SECONDS:-50}
+      RDP_TOKEN_HEARTBEAT_GRACE_SECONDS: ${RDP_TOKEN_HEARTBEAT_GRACE_SECONDS:-12}
+      RDP_TOKEN_PUBLIC_RDP_HOST: ${RDP_TOKEN_PUBLIC_RDP_HOST}
+      RDP_TOKEN_PORT_MIN: ${RDP_TOKEN_PORT_MIN:-60000}
+      RDP_TOKEN_PORT_MAX: ${RDP_TOKEN_PORT_MAX:-60999}
+    volumes:
+      - ./data:/data
+      - ./certs:/certs:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+
+  nginx:
+    image: nginx:1.28-alpine
+    container_name: rdp-token-nginx
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      RDP_TOKEN_HTTPS_PORT: ${RDP_TOKEN_HTTPS_PORT:-18443}
+      RDP_TOKEN_APP_PORT: ${RDP_TOKEN_APP_PORT:-18081}
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${RDP_TOKEN_SERVER_CERT}:/certs/server-fullchain.pem:ro
+      - ${RDP_TOKEN_SERVER_KEY}:/certs/server-key.pem:ro
+      - ./certs/client-ca.pem:/certs/client-ca.pem:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:size=1m
+      - /var/cache/nginx:size=16m
+      - /var/run:size=1m
+      - /tmp:size=8m

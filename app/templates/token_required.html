@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Требуется токен · RDP-Token{% endblock %}
+{% block content %}
+<section class="card token-required">
+  <h1>Доступ только по сертификату</h1>
+  <p>Сертификат клиента не получен. Логин и пароль для входа не используются.</p>
+  <ol>
+    <li>Подключи Rutoken к компьютеру.</li>
+    <li>Установи официальный драйвер или плагин, если устройство не определяется.</li>
+    <li>Полностью закрой браузер, открой его заново и повтори вход.</li>
+  </ol>
+  <div class="download-actions">
+    <a class="button primary" href="https://www.rutoken.ru/support/download/windows/" rel="noopener">Rutoken для Windows</a>
+    <a class="button" href="https://www.rutoken.ru/support/download/rutoken-plugin/" rel="noopener">Rutoken Плагин</a>
+    <a class="button" href="https://www.rutoken.ru/support/download/nix/" rel="noopener">Rutoken для Linux</a>
+  </div>
+  <p class="muted">Если сертификат уже установлен в системном хранилище, физический токен для открытия страницы не обязателен.</p>
+</section>
+{% endblock %}

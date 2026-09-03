@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}RDP-Token{% endblock %}</title>
+  <link rel="icon" type="image/x-icon" sizes="any" href="{{ url_for('static', filename='brand/token_access.ico', v='20260902') }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='brand/token_access.png', v='20260902') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/token_access.png', v='20260902') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('portal') }}"><span class="brand-logo-wrap"><img src="{{ url_for('static', filename='brand/token_access.png') }}" alt="Vovan-T Token"></span><span class="brand-title">RDP-Token</span></a>
+    {% block header_status %}{% endblock %}
+    {% if token and token.role == 'ADMIN' %}
+    <nav class="top-actions" aria-label="Основное меню">
+      <a class="top-action{% if request.endpoint == 'portal' %} active{% endif %}" href="{{ url_for('portal') }}">Подключения</a>
+      <a class="top-action{% if request.endpoint == 'admin' %} active{% endif %}" href="{{ url_for('admin') }}">Управление</a>
+    </nav>
+    {% endif %}
+  </header>
+  <main class="page">{% block content %}{% endblock %}</main>
+</body>
+</html>
