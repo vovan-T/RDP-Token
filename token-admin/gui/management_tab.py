@@ -1,12 +1,14 @@
 import tkinter as tk
 import queue
 import threading
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from adapters.server_admin import (
     admin_action, exchange_certificate_session, exchange_recovery_code, load_admin_state,
 )
 from gui.icons import action_button
+from core.token_exchange import load_file, normalize_serial
+from gui.token_exchange_dialogs import ImportTokenDialog, export_card
 
 
 class PhysicalTokenDialog(tk.Toplevel):
@@ -33,11 +35,19 @@ class PhysicalTokenDialog(tk.Toplevel):
             values=[item["display"] for item in candidates],
         )
         self.choice.pack(fill="x")
-        self.choice.current(0)
+        if candidates:
+            self.choice.current(0)
+        else:
+            ttk.Label(body, text="Новых подключённых токенов нет. Можно добавить из файла.").pack(anchor="w", pady=(8, 0))
         buttons = ttk.Frame(body)
         buttons.pack(fill="x", pady=(16, 0))
         action_button(buttons, "Отмена", self.destroy).pack(side="right")
         action_button(buttons, "Добавить", self._accept).pack(side="right", padx=(0, 7))
+        action_button(buttons, "Из файла...", self._from_file).pack(side="left")
+
+    def _from_file(self):
+        self.result = {"action": "token_import_file"}
+        self.destroy()
 
     def _accept(self):
         index = self.choice.current()
@@ -540,6 +550,41 @@ class ManagementFrame(ttk.Frame):
         )
         return False
 
+    def import_token(self):
+        if not self.auth:
+            messagebox.showerror("Импорт токена", "Сначала выполни административный вход.", parent=self)
+            return
+        if not self._ensure_auth_device():
+            return
+        path = filedialog.askopenfilename(parent=self, title="Импорт карточки или сертификата",
+            filetypes=(("Карточка или сертификат", "*.json *.pem *.cer *.crt *.der"), ("Все файлы", "*.*")))
+        if not path:
+            return
+        try:
+            record = load_file(path)
+            existing = next((item for item in self.state.get("tokens", [])
+                             if normalize_serial(item["serial"]) == normalize_serial(record["serial"])), None)
+            if existing:
+                messagebox.showinfo("Импорт токена", f"Сертификат уже зарегистрирован: {existing['label']}.\nЗапись и доступ не изменены.", parent=self)
+                return
+        except (OSError, ValueError, TypeError) as exc:
+            messagebox.showerror("Импорт токена", str(exc), parent=self)
+            return
+        dialog = ImportTokenDialog(self, record)
+        self.wait_window(dialog)
+        if dialog.result:
+            self._action("token_register", **dialog.result)
+
+    def export_token(self):
+        if not self.auth or not self._ensure_auth_device():
+            messagebox.showerror("Экспорт токена", "Сначала выполни административный вход.", parent=self)
+            return
+        item = self._selected(self.token_tree, "token", self.state.get("tokens", []), "serial")
+        if not item:
+            messagebox.showinfo("Экспорт токена", "Выбери зарегистрированный токен в списке.", parent=self)
+            return
+        export_card(self, item)
+
     def approve_token(self):
         registered = {
             "".join(char for char in item["serial"].upper() if char.isalnum()).lstrip("0") or "0"
@@ -579,13 +624,13 @@ class ManagementFrame(ttk.Frame):
                     "default_label": "Новый токен",
                     "display": f"Ожидает на сервере | {pending['subject']} | {pending['serial']}",
                 })
-        if not candidates:
-            messagebox.showinfo("Добавить токен", "Новых токенов не обнаружено.", parent=self)
-            return
         dialog = PhysicalTokenDialog(self, candidates)
         self.wait_window(dialog)
         selected = dialog.result
         if selected is None:
+            return
+        if selected.get("action") == "token_import_file":
+            self.import_token()
             return
         self._complete_token_registration(selected)
 

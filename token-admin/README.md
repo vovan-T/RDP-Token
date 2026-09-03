@@ -39,11 +39,18 @@ initialization/formatting operations. Test with expendable tokens; these actions
 can destroy existing private keys. PIN retry counters are hardware-enforced.
 Some CLI-backed operations pass PINs in process arguments: see SECURITY.md.
 
+The `Экспорт токена...` action writes a portable JSON token card containing only
+public certificate identity and metadata. It never exports a private key or PIN.
+An administrator can later choose `Добавить` -> `Из файла...` to register that
+identity when the physical token cannot be connected to the administrator's PC.
+Importing the card grants nothing by itself: the administrator still assigns the
+token to selected systems in the management tab.
+
 ## Local EXE build
 
-The public release contains source archives, not the old development EXE with
-private deployment defaults and vendor binaries. With PyInstaller already
-installed in your selected Python environment, run:
+The release may include an unsigned convenience EXE built from this public tree.
+It does not contain private deployment defaults or vendor binaries. To build the
+same source locally with PyInstaller already installed, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build-windows.ps1

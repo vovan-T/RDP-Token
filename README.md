@@ -1,6 +1,6 @@
 # RDP-Token
 
-![RDP-Token](app/static/brand/token_access.png)
+![RDP-Token](app/static/brand/rdp-token-logo.png)
 
 Certificate-authenticated web portal, time-limited TCP gateway for RDP, and
 Vovan-T Token Manager desktop sources. **Laboratory preview — not a hardened
@@ -15,12 +15,14 @@ replacement for RD Gateway, VPN or a zero-trust access product.**
 - Web management: certificates/tokens, systems, access assignments, port range,
   and connection journal.
 - Windows-oriented Python/Tkinter Token Manager: local token inventory,
-  CSR/certificate operations and remote gateway management.
+  CSR/certificate operations, portable public token-card export/import and
+  remote gateway management.
 - Isolated tests, Windows build instructions and deployment examples.
 
 No deployment keys, certificates, databases, PINs, logs, vendor installers or
-prebuilt EXEs are distributed. Vendor tools are obtained separately under their
-own terms. See [Token Manager](token-admin/README.md).
+vendor libraries are distributed. The optional unsigned Windows EXE contains
+only the public Python application and visual resources; vendor tools are
+obtained separately under their own terms. See [Token Manager](token-admin/README.md).
 
 ## Connection model
 
@@ -84,10 +86,11 @@ Windows desktop behavior require separate client testing.
 
 ## Release status
 
-`v0.1.0-preview.1` packages the laboratory implementation. Deployment-specific
+`v0.1.0-preview.2` packages the laboratory implementation. Deployment-specific
 defaults were replaced with examples; the tested grant/relay logic was retained.
-Windows installer signing, driver redistribution and Linux feature parity are
-not part of this release. No general open-source license is selected yet; public
+The desktop client adds portable public token cards and the final Vovan-T visual
+identity. Windows installer signing, driver redistribution and Linux feature
+parity are not part of this release. No general open-source license is selected yet; public
 visibility is not a grant of redistribution rights beyond applicable platform terms.
 
 This is an independent project, not affiliated with Microsoft, Aktiv or ISBC.

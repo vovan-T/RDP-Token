@@ -1,5 +1,5 @@
 APP_NAME = "Vovan-T · Токены"
-APP_VERSION = "0.6.4-python"
+APP_VERSION = "0.6.7-python"
 
 SUPPORTED_TOKENS = (
     "Rutoken (Aktiv): обнаружение, PIN, RSA/ГОСТ-ключи и сертификаты, RSA CSR, установка сертификата, форматирование.",

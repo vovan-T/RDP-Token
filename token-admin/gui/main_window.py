@@ -25,6 +25,7 @@ from core.settings import ClientSettings, load_settings, save_settings
 from core.version import APP_NAME, APP_VERSION, SUPPORTED_TOKENS
 from gui.icons import ToolTip, action_button, icon_button, load_icons, resource_root
 from gui.management_tab import ManagementFrame
+from gui.token_exchange_dialogs import export_card
 
 
 class SettingsDialog(tk.Toplevel):
@@ -124,18 +125,16 @@ class RequestDialog(tk.Toplevel):
         self.on_submit = on_submit
         body = ttk.Frame(self, padding=18)
         body.pack(fill="both", expand=True)
-        default_name = token.label or f"RDP-{token.serial[-8:]}"
-        safe_login = "".join(char.lower() if char.isalnum() else "-" for char in default_name).strip("-")
-        self.common_name = tk.StringVar(value=default_name)
-        self.key_label = tk.StringVar(value=default_name)
-        self.certificate_label = tk.StringVar(value=default_name)
+        import getpass
+        server_name = parent.settings.server_address.strip()
+        self.common_name = tk.StringVar(value="")
+        self.key_label = tk.StringVar(value="Vovan-T RDP")
+        self.certificate_label = tk.StringVar(value=server_name)
         self.organization = tk.StringVar(value="Vovan-T")
         self.org_unit = tk.StringVar(value="Token Manager")
         self.country = tk.StringVar(value="RU")
         self.subject_serial = tk.StringVar(value=token.serial)
-        self._previous_cn = default_name
-        self.common_name.trace_add("write", self._suggest_object_labels)
-        self.upn = tk.StringVar(value=f"{safe_login}@example.invalid")
+        self.upn = tk.StringVar(value=f"{getpass.getuser()}@{server_name}")
         self.token = token
         if token.vendor == "ISBC":
             options = token.key_options
@@ -150,7 +149,7 @@ class RequestDialog(tk.Toplevel):
         if not options:
             options = ("ECDSA:256",) if token.vendor == "ISBC" else ("RSA:2048",)
         self.algorithm = tk.StringVar(value=options[0])
-        for label, variable in (("CN — имя сертификата", self.common_name),
+        for label, variable in (("Название сертификата (CN) — обязательно", self.common_name),
                                 ("Название ключа на токене", self.key_label),
                                 ("Название сертификата на токене", self.certificate_label),
                                 ("UPN — учётное имя", self.upn)):
@@ -187,14 +186,6 @@ class RequestDialog(tk.Toplevel):
         buttons.pack(fill="x", pady=(17, 0))
         action_button(buttons, "Отмена", self.destroy).pack(side="right")
         action_button(buttons, "Создать", self._submit).pack(side="right", padx=(0, 7))
-
-    def _suggest_object_labels(self, *_):
-        new_cn = self.common_name.get().strip()
-        if self.key_label.get().strip() == self._previous_cn:
-            self.key_label.set(new_cn)
-        if self.certificate_label.get().strip() == self._previous_cn:
-            self.certificate_label.set(new_cn)
-        self._previous_cn = new_cn
 
     def _submit(self):
         cn = self.common_name.get().strip()
@@ -619,6 +610,7 @@ class TokenAdmin(tk.Tk):
             state="disabled",
         )
         self.delete_object_action.pack(side="right")
+        action_button(object_actions, "Экспорт токена...", self.export_token_card).pack(side="left")
 
         self.status = ttk.Label(token_page, padding=(16, 8), relief="sunken", anchor="w",
                                 text=f"ОС: {platform.system()} · ожидание сканирования")
@@ -739,6 +731,26 @@ class TokenAdmin(tk.Tk):
             return
         messagebox.showinfo("Смена PIN", "PIN изменён.", parent=self)
         self.refresh()
+
+    def export_token_card(self):
+        token = self.selected_token
+        if token is None:
+            messagebox.showinfo("Экспорт токена", "Выбери токен и его сертификат.", parent=self)
+            return
+        certificates = [item for item in token.objects if all(item.get(key) for key in ("serial", "subject", "issuer"))]
+        selected = None
+        if self.objects.selection():
+            item_id = self.objects.selection()[0]
+            if item_id.startswith("object-"):
+                item = token.objects[int(item_id.split("-", 1)[1])]
+                if item in certificates:
+                    selected = item
+        if selected is None and len(certificates) == 1:
+            selected = certificates[0]
+        if selected is None:
+            messagebox.showinfo("Экспорт токена", "Выбери нужный сертификат в «Содержимом».\nДля экспорта нужен выпущенный сертификат, не ключ и не CSR.", parent=self)
+            return
+        export_card(self, selected, token.label or selected.get("label") or "Новый токен")
 
     def _object_selected(self, _event=None):
         enabled = False

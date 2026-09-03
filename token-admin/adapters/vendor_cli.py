@@ -7,9 +7,7 @@ from pathlib import Path
 
 
 def _application_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 
 
 def _run(executable: Path, *arguments: str, timeout: int = 15) -> str:

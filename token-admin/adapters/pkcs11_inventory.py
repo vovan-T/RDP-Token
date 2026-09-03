@@ -8,10 +8,10 @@ from core.certificate_fields import name_fields
 
 try:
     from cryptography import x509
-    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec, rsa
 except ImportError:
-    x509 = hashes = ec = rsa = None
+    x509 = hashes = serialization = ec = rsa = None
 
 
 CKR_OK = 0
@@ -102,9 +102,7 @@ class CK_SLOT_INFO(ctypes.Structure):
 
 
 def _root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 
 
 def _function(pointer, *arguments):
@@ -170,6 +168,7 @@ def _certificate_details(value: bytes) -> dict:
             "not_after_date": certificate.not_valid_after_utc.strftime("%d.%m.%Y %H:%M UTC"),
             "fingerprint": certificate.fingerprint(hashes.SHA1()).hex().upper(),
             "fingerprint_sha256": certificate.fingerprint(hashes.SHA256()).hex().upper(),
+            "certificate_pem": certificate.public_bytes(serialization.Encoding.PEM).decode("ascii"),
         }
     except Exception:
         return {}

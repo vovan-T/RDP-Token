@@ -9,9 +9,9 @@ from ctypes import wintypes
 
 try:
     from cryptography import x509
-    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives import hashes, serialization
 except ImportError:
-    x509 = hashes = None
+    x509 = hashes = serialization = None
 
 
 CERT_KEY_PROV_INFO_PROP_ID = 2
@@ -156,6 +156,7 @@ def _certificate_details(encoded: bytes, provider_info: dict, unique_container: 
         "not_after_date": certificate.not_valid_after_utc.strftime("%d.%m.%Y %H:%M UTC"),
         "fingerprint": fingerprint,
         "fingerprint_sha256": certificate.fingerprint(hashes.SHA256()).hex().upper(),
+        "certificate_pem": certificate.public_bytes(serialization.Encoding.PEM).decode("ascii"),
         "provider": provider_info.get("provider", ""),
         "container": provider_info.get("container", ""),
         "unique_container": unique_container,

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-preview.2 — 2026-09-03
+
+- Added export of a selected token certificate as a portable public token card.
+- Added offline import of that card into gateway administration.
+- Added final Vovan-T branding for the web portal, browser favicon and Windows client.
+- Updated Token Manager to 0.6.7; deployment addresses remain neutral examples.
+- Release EXE excludes vendor binaries, private keys, PINs and deployment data.
+
 ## 0.1.0-preview.1 — 2026-09-03
 
 - Initial public source package: Docker gateway, web management and desktop sources.
