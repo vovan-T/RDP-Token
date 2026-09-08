@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from core.token_exchange import export_bytes, registration_record, suggested_filename
-from gui.icons import action_button
+from gui.icons import CenteredToplevel, action_button
 
 
 def export_card(parent, source, label=None):
@@ -27,7 +27,7 @@ def export_card(parent, source, label=None):
     messagebox.showinfo("Экспорт токена", f"Карточка сохранена.\n{detail}\nЗакрытые ключи, PIN, роли и доступ не экспортируются.", parent=parent)
 
 
-class ImportTokenDialog(tk.Toplevel):
+class ImportTokenDialog(CenteredToplevel):
     def __init__(self, parent, record):
         super().__init__(parent)
         self.title("Импорт токена — проверка данных")

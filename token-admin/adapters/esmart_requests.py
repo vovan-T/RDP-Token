@@ -3,10 +3,12 @@ import os
 import base64
 import textwrap
 import secrets
+import platform
 from datetime import datetime
 from pathlib import Path
 
-from adapters.vendor_cli import _application_root, _run, read_esmart_details
+from adapters.tool_paths import lib_file
+from adapters.vendor_cli import _run, read_esmart_details
 
 
 def _safe(value: str) -> str:
@@ -23,7 +25,7 @@ def _slot_for(serial: str) -> str:
 
 
 def _tool() -> Path:
-    return _application_root() / "vendor" / "esmart" / "tools" / "windows-x64" / "PKIClientCli.exe"
+    return lib_file("PKIClientCli.exe" if platform.system() == "Windows" else "PKIClientCli")
 
 
 def _check_json(output: str, operation: str) -> dict:

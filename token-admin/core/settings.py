@@ -6,9 +6,9 @@ from pathlib import Path
 
 @dataclass
 class ClientSettings:
-    server_address: str = "rdp.example.invalid"
+    server_address: str = ""
     server_port: int = 443
-    tls_server_name: str = "rdp.example.invalid"
+    tls_server_name: str = ""
 
 
 def settings_path() -> Path:
@@ -22,10 +22,12 @@ def load_settings() -> ClientSettings:
         return ClientSettings()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        address = str(data.get("server_address", "")).strip()
+        tls_name = str(data.get("tls_server_name", "")).strip()
         return ClientSettings(
-            server_address=str(data.get("server_address", "rdp.example.invalid")).strip(),
+            server_address=address,
             server_port=int(data.get("server_port", 443)),
-            tls_server_name=str(data.get("tls_server_name", "rdp.example.invalid")).strip(),
+            tls_server_name=tls_name,
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return ClientSettings()

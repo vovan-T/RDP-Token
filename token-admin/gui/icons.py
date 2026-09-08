@@ -19,6 +19,45 @@ def load_icons(master):
     }
 
 
+class CenteredToplevel(tk.Toplevel):
+    """A dialog that appears centered over its owning application window."""
+
+    def __init__(self, parent=None, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        self._dialog_parent = parent
+        self.after_idle(self._place_over_parent)
+
+    def _place_over_parent(self):
+        try:
+            if not self.winfo_exists():
+                return
+            self.update_idletasks()
+            owner = self._dialog_parent.winfo_toplevel() if self._dialog_parent else None
+            if owner is not None and owner.winfo_exists():
+                owner.update_idletasks()
+                owner_x, owner_y = owner.winfo_rootx(), owner.winfo_rooty()
+                owner_width, owner_height = owner.winfo_width(), owner.winfo_height()
+            else:
+                owner_x = self.winfo_vrootx()
+                owner_y = self.winfo_vrooty()
+                owner_width = self.winfo_vrootwidth()
+                owner_height = self.winfo_vrootheight()
+
+            width = max(self.winfo_width(), self.winfo_reqwidth())
+            height = max(self.winfo_height(), self.winfo_reqheight())
+            x = owner_x + (owner_width - width) // 2
+            y = owner_y + (owner_height - height) // 2
+
+            screen_x, screen_y = self.winfo_vrootx(), self.winfo_vrooty()
+            screen_right = screen_x + self.winfo_vrootwidth()
+            screen_bottom = screen_y + self.winfo_vrootheight()
+            x = max(screen_x, min(x, max(screen_x, screen_right - width)))
+            y = max(screen_y, min(y, max(screen_y, screen_bottom - height)))
+            self.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            return
+
+
 class ToolTip:
     def __init__(self, widget, text):
         self.widget = widget

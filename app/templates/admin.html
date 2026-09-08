@@ -4,7 +4,7 @@
   <span class="header-health"><i></i>Работает</span><span><b>{{ targets|length }}</b> систем</span><span><b>{{ tokens|selectattr('enabled')|list|length }}</b> токенов</span><span><b>{{ active_sessions }}</b> RDP</span><span><b>{{ free_ports }}</b> портов</span>
 </div>{% endblock %}
 {% block content %}
-<nav class="admin-nav"><a href="#tokens">Токены</a><a href="#systems">Системы</a><a href="#ports">Порты</a><a href="#journal">Журнал</a></nav>
+<nav class="admin-nav"><a href="#tokens">Токены</a><a href="#systems">Системы</a><a href="#ports">Порты</a><a href="#crl">CRL</a><a href="#journal">Журнал</a></nav>
 
 <section class="card" id="tokens">
   <div class="section-heading"><div><span class="eyebrow">Авторизация</span><h2>Токены</h2></div><span class="count-pill">{{ tokens|length }}{% if pending_tokens %} + {{ pending_tokens|length }} новых{% endif %}</span></div>
@@ -34,6 +34,22 @@
 </section>
 
 <section class="card" id="ports"><div class="section-heading"><div><span class="eyebrow">Маршрутизация</span><h2>Порты</h2></div><span class="range-pill">{{ free_ports }} свободно</span></div><form method="post" action="{{ url_for('admin_update_port_range') }}" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><label>От<input name="port_min" type="number" min="1024" max="65535" value="{{ port_min }}" required></label><label>До<input name="port_max" type="number" min="1024" max="65535" value="{{ port_max }}" required></label><button class="button secondary compact" type="submit">Сохранить</button></form></section>
+
+<section class="card" id="crl">
+  <div class="section-heading"><div><span class="eyebrow">Проверка сертификатов</span><h2>CRL</h2></div><span class="crl-state {% if crl.current %}ok{% else %}bad{% endif %}">{% if crl.current %}✓ Актуален{% else %}× Требует внимания{% endif %}</span></div>
+  <div class="crl-grid">
+    <div><small>Файл</small><strong>{{ crl.file_name or '—' }}</strong></div>
+    <div><small>Издатель</small><strong>{{ crl.issuer or '—' }}</strong></div>
+    <div><small>Выпущен</small><strong>{{ crl.last_update or '—' }}</strong></div>
+    <div><small>Действует до</small><strong>{{ crl.next_update or '—' }}</strong></div>
+    <div><small>Отозвано</small><strong>{{ crl.revoked_count }}</strong></div>
+    <div><small>Скачан</small><strong>{{ crl.downloaded_at or '—' }}</strong></div>
+    <div class="wide"><small>Публичный URL</small><a href="{{ crl.url }}" target="_blank" rel="noopener">{{ crl.url }}</a></div>
+    <div class="wide"><small>Локальная копия</small><code>{{ crl.local_file }}</code></div>
+  </div>
+  {% if crl.error %}<p class="crl-error">{{ crl.error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('admin_refresh_crl') }}" class="crl-actions"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="button primary" type="submit">Обновить CRL</button></form>
+</section>
 
 <section class="card" id="journal"><div class="section-heading"><div><span class="eyebrow">История</span><h2>Журнал</h2></div><span class="count-pill">100 последних</span></div><div class="table-wrap"><table><thead><tr><th>Токен</th><th>Система</th><th>Источник</th><th>Состояние</th><th>Начало</th><th>Окончание</th></tr></thead><tbody>{% for item in logs %}<tr><td>{{ item.label or item.token_serial }}</td><td>{{ item.name }}</td><td>{{ item.source_ip }}</td><td>{{ item.state }}</td><td>{{ item.started_at }}</td><td>{{ item.ended_at or '—' }}</td></tr>{% else %}<tr><td colspan="6" class="empty">Журнал пуст.</td></tr>{% endfor %}</tbody></table></div></section>
 

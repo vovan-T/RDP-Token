@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import platform
@@ -122,6 +123,30 @@ def exchange_certificate_session(settings, certificate):
         "/api/admin/session",
         auth={"certificate": certificate},
         payload={},
+    )
+
+
+def request_token_challenge(settings, certificate_pem):
+    result = _request_native(
+        settings,
+        "/api/admin/challenge",
+        payload={"certificate_pem": certificate_pem},
+    )
+    try:
+        result["challenge_bytes"] = base64.b64decode(result["challenge"], validate=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("Сервер вернул некорректный одноразовый запрос") from exc
+    return result
+
+
+def exchange_token_signature(settings, challenge_id, signature):
+    return _request_native(
+        settings,
+        "/api/admin/challenge/verify",
+        payload={
+            "challenge_id": challenge_id,
+            "signature": base64.b64encode(signature).decode("ascii"),
+        },
     )
 
 

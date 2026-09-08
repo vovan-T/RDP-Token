@@ -1,5 +1,7 @@
 """No real CA, token, external network or live database is accessed."""
 import os
+import base64
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -44,6 +46,49 @@ class GatewayTests(unittest.TestCase):
             response = self.client.post('/api/recovery/exchange', json={'code': code},
                                         headers={'X-RDP-Token-Client': 'windows'})
         self.assertEqual(response.status_code, 401)
+
+    def test_admin_challenge_is_signed_and_single_use(self):
+        work = tempfile.TemporaryDirectory()
+        key_path = work.name + '/key.pem'
+        cert_path = work.name + '/cert.pem'
+        challenge_path = work.name + '/challenge.bin'
+        signature_path = work.name + '/signature.bin'
+        subprocess.run([
+            '/usr/bin/openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+            '-subj', '/CN=unit-token', '-set_serial', '0xA1B2C3',
+            '-keyout', key_path, '-out', cert_path, '-days', '1',
+        ], check=True, capture_output=True)
+        with open(cert_path, encoding='ascii') as handle:
+            pem = handle.read()
+        with m.db() as con:
+            con.execute("INSERT OR REPLACE INTO tokens(serial,label,role,enabled) "
+                        "VALUES('A1B2C3','unit-admin','ADMIN',1)")
+        headers = {'X-RDP-Token-Client': 'windows'}
+        identity = {'serial': 'A1B2C3', 'subject': 'CN=unit-token',
+                    'issuer': 'CN=unit-token', 'ca': 'unit'}
+        with patch.object(m, 'validate_client_certificate',
+                          return_value=(True, identity, 'OK')):
+            issued = self.client.post('/api/admin/challenge',
+                                      json={'certificate_pem': pem}, headers=headers)
+        self.assertEqual(issued.status_code, 200)
+        challenge = base64.b64decode(issued.json['challenge'])
+        with open(challenge_path, 'wb') as handle:
+            handle.write(challenge)
+        subprocess.run([
+            '/usr/bin/openssl', 'dgst', '-sha256', '-sign', key_path,
+            '-out', signature_path, challenge_path,
+        ], check=True, capture_output=True)
+        with open(signature_path, 'rb') as handle:
+            signature = handle.read()
+        payload = {
+            'challenge_id': issued.json['challenge_id'],
+            'signature': base64.b64encode(signature).decode('ascii'),
+        }
+        accepted = self.client.post('/api/admin/challenge/verify', json=payload, headers=headers)
+        self.assertEqual(accepted.status_code, 200)
+        self.assertIn('session', accepted.json)
+        replay = self.client.post('/api/admin/challenge/verify', json=payload, headers=headers)
+        self.assertEqual(replay.status_code, 401)
 
     def test_authenticated_rdp_output(self):
         with m.db() as con:

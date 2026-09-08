@@ -5,19 +5,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-
-def _application_root() -> Path:
-    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+from adapters.tool_paths import application_root as _application_root, lib_file
 
 
 def _run(executable: Path, *arguments: str, timeout: int = 15) -> str:
-    if platform.system() != "Windows":
-        return ""
     if not executable.is_file():
         raise RuntimeError(f"Не найдена штатная утилита: {executable.name}")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
     result = subprocess.run(
         [str(executable), *arguments], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=timeout,
+        check=False, creationflags=creationflags, timeout=timeout,
     )
     output = result.stdout.decode("utf-8", errors="replace")
     if "�" in output:
@@ -33,7 +30,7 @@ def _value(text: str, name: str) -> str:
 
 
 def read_rutoken_details() -> list[dict]:
-    tool = _application_root() / "vendor" / "rutoken" / "tools" / "windows-x64" / "rtadmin.exe"
+    tool = lib_file("rtadmin.exe" if platform.system() == "Windows" else "rtadmin")
     serials = re.findall(r"-\s*(\d+)\s*$", _run(tool, "list-tokens"), re.MULTILINE)
     result = []
     for serial in serials:
@@ -48,7 +45,7 @@ def read_rutoken_details() -> list[dict]:
 
 
 def set_rutoken_label(serial: str, pin: str, label: str) -> None:
-    tool = _application_root() / "vendor" / "rutoken" / "tools" / "windows-x64" / "rtadmin.exe"
+    tool = lib_file("rtadmin.exe" if platform.system() == "Windows" else "rtadmin")
     _run(
         tool, "set-label", "-s", serial,
         "--auth-pin-input", "options", "--auth-pin", pin,
@@ -57,7 +54,7 @@ def set_rutoken_label(serial: str, pin: str, label: str) -> None:
 
 
 def read_esmart_details() -> list[dict]:
-    tool = _application_root() / "vendor" / "esmart" / "tools" / "windows-x64" / "PKIClientCli.exe"
+    tool = lib_file("PKIClientCli.exe" if platform.system() == "Windows" else "PKIClientCli")
     blocks = re.split(r"(?=^Slot\s+\d+:)", _run(tool, "listslots"), flags=re.MULTILINE)
     result = []
     for block in blocks:

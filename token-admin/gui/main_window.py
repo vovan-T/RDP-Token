@@ -22,13 +22,13 @@ from adapters.token_format import format_token
 from adapters.vendor_cli import set_rutoken_label
 from adapters.windows_certreq import create_smartcard_request, install_smartcard_certificate
 from core.settings import ClientSettings, load_settings, save_settings
-from core.version import APP_NAME, APP_VERSION, SUPPORTED_TOKENS
-from gui.icons import ToolTip, action_button, icon_button, load_icons, resource_root
+from core.version import APP_BRAND, APP_NAME, APP_VERSION, SUPPORTED_TOKENS
+from gui.icons import CenteredToplevel, ToolTip, action_button, icon_button, load_icons, resource_root
 from gui.management_tab import ManagementFrame
 from gui.token_exchange_dialogs import export_card
 
 
-class SettingsDialog(tk.Toplevel):
+class SettingsDialog(CenteredToplevel):
     def __init__(self, parent, settings, on_save):
         super().__init__(parent)
         self.title("Настройки сервера")
@@ -78,7 +78,7 @@ class SettingsDialog(tk.Toplevel):
         self.destroy()
 
 
-class PinDialog(tk.Toplevel):
+class PinDialog(CenteredToplevel):
     def __init__(self, parent, token, on_submit):
         super().__init__(parent)
         self.title("Проверка PIN")
@@ -115,7 +115,7 @@ class PinDialog(tk.Toplevel):
         self.on_submit(pin)
 
 
-class RequestDialog(tk.Toplevel):
+class RequestDialog(CenteredToplevel):
     def __init__(self, parent, token, on_submit):
         super().__init__(parent)
         self.title("Создать ключ и запрос")
@@ -220,7 +220,7 @@ class RequestDialog(tk.Toplevel):
         self.on_submit(cn, upn, key_label, certificate_label, subject_fields, algorithm, pin)
 
 
-class CertificateLabelsDialog(tk.Toplevel):
+class CertificateLabelsDialog(CenteredToplevel):
     def __init__(self, parent, key_label, certificate_label, on_submit):
         super().__init__(parent)
         self.title("Названия объектов токена")
@@ -293,7 +293,7 @@ def _certificate_input(path: Path):
     return certificate_path, temporary, key_label or common_name, certificate_label or common_name
 
 
-class ChangePinDialog(tk.Toplevel):
+class ChangePinDialog(CenteredToplevel):
     def __init__(self, parent, token, on_submit):
         super().__init__(parent)
         self.title("Сменить PIN")
@@ -329,7 +329,7 @@ class ChangePinDialog(tk.Toplevel):
         self.on_submit(old_pin, new_pin)
 
 
-class InitializeDialog(tk.Toplevel):
+class InitializeDialog(CenteredToplevel):
     def __init__(self, parent, token, on_submit):
         super().__init__(parent)
         self.title("Инициализировать токен")
@@ -371,7 +371,7 @@ class InitializeDialog(tk.Toplevel):
         self.on_submit(label, so_pin, user_pin)
 
 
-class FormatDialog(tk.Toplevel):
+class FormatDialog(CenteredToplevel):
     def __init__(self, parent, token, on_submit):
         super().__init__(parent)
         self.title("Форматировать токен")
@@ -424,7 +424,7 @@ class FormatDialog(tk.Toplevel):
         self.on_submit(*values)
 
 
-class InfoDialog(tk.Toplevel):
+class InfoDialog(CenteredToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("О программе")
@@ -434,6 +434,7 @@ class InfoDialog(tk.Toplevel):
         body = ttk.Frame(self, padding=20)
         body.pack(fill="both", expand=True)
         ttk.Label(body, text=APP_NAME, style="Title.TLabel").pack(anchor="w")
+        ttk.Label(body, text=APP_BRAND, style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
         ttk.Label(body, text=f"Версия: {APP_VERSION}", style="Value.TLabel").pack(anchor="w", pady=(4, 16))
         ttk.Label(body, text="Поддерживаемые токены", style="Section.TLabel").pack(anchor="w", pady=(0, 7))
         for item in SUPPORTED_TOKENS:
@@ -443,7 +444,7 @@ class InfoDialog(tk.Toplevel):
         action_button(body, "Закрыть", self.destroy).pack(anchor="e", pady=(18, 0))
 
 
-class DetailsDialog(tk.Toplevel):
+class DetailsDialog(CenteredToplevel):
     def __init__(self, parent, heading, fields):
         super().__init__(parent)
         self.title(heading)
@@ -620,6 +621,7 @@ class TokenAdmin(tk.Tk):
             lambda: self.settings,
             lambda: self.selected_token,
             self._management_inventory,
+            lambda token, callback: PinDialog(self, token, callback),
             self.icons,
         )
         self.main_tabs.add(self.management, text="Управление")
@@ -635,6 +637,9 @@ class TokenAdmin(tk.Tk):
         SettingsDialog(self, self.settings, self._save_settings)
 
     def open_server(self):
+        if not self.settings.server_address.strip():
+            self.open_settings()
+            return
         port = "" if self.settings.server_port == 443 else f":{self.settings.server_port}"
         webbrowser.open(f"https://{self.settings.server_address}{port}/")
 
@@ -1019,6 +1024,9 @@ class TokenAdmin(tk.Tk):
         self._update_server_label()
 
     def _update_server_label(self):
+        if not self.settings.server_address.strip():
+            self.server_button.configure(text="Сервер не настроен")
+            return
         port = "" if self.settings.server_port == 443 else f":{self.settings.server_port}"
         self.server_button.configure(text=f"https://{self.settings.server_address}{port}")
 

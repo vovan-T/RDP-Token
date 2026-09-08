@@ -10,7 +10,7 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="{{ url_for('portal') }}"><span class="brand-logo-wrap"><img src="{{ url_for('static', filename='brand/rdp-token-logo.png', v='20260903') }}" alt="Vovan-T RDP-Token"></span></a>
+    <a class="brand" href="{{ url_for('portal') }}"><span class="brand-logo-wrap"><img src="{{ url_for('static', filename='brand/rdp-token-favicon.png', v='20260903') }}" alt="RDP-Token"></span></a>
     {% block header_status %}{% endblock %}
     {% if token and token.role == 'ADMIN' %}
     <nav class="top-actions" aria-label="Основное меню">
@@ -20,5 +20,6 @@
     {% endif %}
   </header>
   <main class="page">{% block content %}{% endblock %}</main>
+  <footer class="site-footer">Vovan-T · <a href="https://github.com/vovan-T/RDP-Token" target="_blank" rel="noopener noreferrer">GitHub</a></footer>
 </body>
 </html>

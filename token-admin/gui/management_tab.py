@@ -4,14 +4,16 @@ import threading
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from adapters.server_admin import (
-    admin_action, exchange_certificate_session, exchange_recovery_code, load_admin_state,
+    admin_action, exchange_recovery_code, exchange_token_signature, load_admin_state,
+    request_token_challenge,
 )
-from gui.icons import action_button
+from adapters.token_signing import sign_token_challenge
+from gui.icons import CenteredToplevel, action_button
 from core.token_exchange import load_file, normalize_serial
 from gui.token_exchange_dialogs import ImportTokenDialog, export_card
 
 
-class PhysicalTokenDialog(tk.Toplevel):
+class PhysicalTokenDialog(CenteredToplevel):
     def __init__(self, parent, candidates):
         super().__init__(parent)
         self.title("Добавить токен")
@@ -56,7 +58,7 @@ class PhysicalTokenDialog(tk.Toplevel):
         self.destroy()
 
 
-class RecoveryLoginDialog(tk.Toplevel):
+class RecoveryLoginDialog(CenteredToplevel):
     COMMAND = "sudo docker exec rdp-token-app recovery"
 
     def __init__(self, parent):
@@ -86,18 +88,83 @@ class RecoveryLoginDialog(tk.Toplevel):
             self.destroy()
 
 
+class CrlDialog(CenteredToplevel):
+    def __init__(self, parent, data, refresh_command):
+        super().__init__(parent)
+        self.title("CRL")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.refresh_command = refresh_command
+        self.body = ttk.Frame(self, padding=18)
+        self.body.pack(fill="both", expand=True)
+        self.values = ttk.Frame(self.body)
+        self.values.pack(fill="both", expand=True)
+        buttons = ttk.Frame(self.body)
+        buttons.pack(fill="x", pady=(16, 0))
+        action_button(buttons, "Закрыть", self.destroy).pack(side="right")
+        self.refresh_button = action_button(
+            buttons, "Обновить CRL", self.refresh_command,
+        )
+        self.refresh_button.pack(side="right", padx=(0, 7))
+        self.render(data)
+
+    def render(self, data):
+        for child in self.values.winfo_children():
+            child.destroy()
+        current = bool(data.get("current"))
+        status_text = "✓ Актуален" if current else "× Требует внимания"
+        status_color = "#176a42" if current else "#9f1f1b"
+        ttk.Label(self.values, text="CRL", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 12),
+        )
+        tk.Label(
+            self.values, text=status_text, foreground=status_color,
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=1, sticky="e", pady=(0, 12))
+        rows = (
+            ("Файл", data.get("file_name") or "—"),
+            ("Издатель", data.get("issuer") or "—"),
+            ("Выпущен", data.get("last_update") or "—"),
+            ("Действует до", data.get("next_update") or "—"),
+            ("Отозвано", str(data.get("revoked_count", 0))),
+            ("Скачан", data.get("downloaded_at") or "—"),
+            ("Публичный URL", data.get("url") or "—"),
+            ("Локальная копия", data.get("local_file") or "—"),
+        )
+        for row, (label, value) in enumerate(rows, start=1):
+            ttk.Label(self.values, text=label, style="Muted.TLabel").grid(
+                row=row, column=0, sticky="nw", padx=(0, 18), pady=4,
+            )
+            ttk.Label(
+                self.values, text=value, wraplength=560, justify="left",
+            ).grid(row=row, column=1, sticky="nw", pady=4)
+        error = data.get("error")
+        if error:
+            tk.Label(
+                self.values, text=error, foreground="#9f1f1b",
+                wraplength=680, justify="left",
+            ).grid(row=len(rows) + 1, column=0, columnspan=2,
+                   sticky="w", pady=(10, 0))
+
+    def set_busy(self, busy):
+        self.refresh_button.configure(state="disabled" if busy else "normal")
+
+
 class ManagementFrame(ttk.Frame):
-    def __init__(self, parent, settings_provider, token_provider, inventory_provider, icons):
+    def __init__(self, parent, settings_provider, token_provider, inventory_provider,
+                 pin_requester, icons):
         super().__init__(parent, padding=12)
         self.settings_provider = settings_provider
         self.token_provider = token_provider
         self.inventory_provider = inventory_provider
+        self.pin_requester = pin_requester
         self.icons = icons
         self.auth = None
         self.state = {}
         self._busy = False
         self._result_queue = queue.Queue()
         self._inline_edit = None
+        self.crl_dialog = None
         self._build()
 
     def _build(self):
@@ -108,6 +175,7 @@ class ManagementFrame(ttk.Frame):
                       image=self.icons["login"], width=112).pack(side="left")
         action_button(bar, "Обновить", self.refresh,
                       image=self.icons["refresh"], width=134).pack(side="left")
+        action_button(bar, "CRL", self.show_crl, width=86).pack(side="left", padx=(7, 0))
         self.status.pack(side="left", padx=(10, 0))
         action_button(bar, "Выход", self.logout,
                       image=self.icons["logout"], width=112).pack(side="right")
@@ -186,15 +254,26 @@ class ManagementFrame(ttk.Frame):
         if token is None:
             messagebox.showerror("Управление", "Сначала выбери физический токен во вкладке «Токены».", parent=self)
             return
-        certificate = next((item for item in token.objects if item.get("fingerprint")), None)
+        certificate = next((item for item in token.objects
+                            if item.get("fingerprint") and item.get("certificate_pem")), None)
         if certificate is None:
             messagebox.showerror("Управление", "На выбранном токене не найден сертификат.", parent=self)
             return
+        self.pin_requester(
+            token,
+            lambda pin: self._login_signed_challenge(token, certificate, pin),
+        )
+
+    def _login_signed_challenge(self, token, certificate, pin):
         settings = self.settings_provider()
         fingerprint = certificate["fingerprint"]
 
         def worker():
-            result = exchange_certificate_session(settings, fingerprint)
+            challenge = request_token_challenge(settings, certificate["certificate_pem"])
+            signature = sign_token_challenge(
+                token, certificate, pin, challenge["challenge_bytes"])
+            result = exchange_token_signature(
+                settings, challenge["challenge_id"], signature)
             auth = {"session": result["session"], "certificate_fingerprint": fingerprint}
             return auth, load_admin_state(settings, auth)
 
@@ -203,7 +282,7 @@ class ManagementFrame(ttk.Frame):
             self.status.configure(text="Вход по сертификату")
             self._fill()
 
-        self._run_background(worker, success, "Вход по сертификату")
+        self._run_background(worker, success, "Проверка подписи токена")
 
     def login_recovery(self):
         dialog = RecoveryLoginDialog(self)
@@ -237,6 +316,39 @@ class ManagementFrame(ttk.Frame):
             self._load()
         else:
             self.status.configure(text="Сначала выполни вход")
+
+    def show_crl(self):
+        if not self.auth:
+            messagebox.showerror("CRL", "Сначала выполни вход.", parent=self)
+            return
+        if self.crl_dialog is not None and self.crl_dialog.winfo_exists():
+            self.crl_dialog.lift()
+            self.crl_dialog.focus_force()
+            return
+        self.crl_dialog = CrlDialog(
+            self, self.state.get("crl", {}), self.refresh_crl_data,
+        )
+
+    def refresh_crl_data(self):
+        if not self.auth or not self._ensure_auth_device():
+            return
+        settings, auth = self.settings_provider(), self.auth
+        if self.crl_dialog is not None and self.crl_dialog.winfo_exists():
+            self.crl_dialog.set_busy(True)
+
+        def worker():
+            admin_action(settings, auth, "crl_refresh")
+            return load_admin_state(settings, auth)
+
+        def success(state):
+            self.state = state
+            self.status.configure(text="CRL обновлён")
+            self._fill()
+            if self.crl_dialog is not None and self.crl_dialog.winfo_exists():
+                self.crl_dialog.set_busy(False)
+                self.crl_dialog.render(state.get("crl", {}))
+
+        self._run_background(worker, success, "Обновление CRL")
 
     def _load(self, label=None):
         settings, auth = self.settings_provider(), self.auth
@@ -274,6 +386,8 @@ class ManagementFrame(ttk.Frame):
         if ok:
             success(value)
         else:
+            if self.crl_dialog is not None and self.crl_dialog.winfo_exists():
+                self.crl_dialog.set_busy(False)
             self.status.configure(text="Операция не выполнена")
             messagebox.showerror(error_title, str(value), parent=self)
 

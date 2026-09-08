@@ -7,6 +7,7 @@ Vovan-T Token Manager desktop sources. **Laboratory preview — not a hardened
 replacement for RD Gateway, VPN or a zero-trust access product.**
 
 Интерфейс портала и клиента — на русском. [Установка и работа](docs/INSTALL.ru.md).
+[Что установить и куда](docs/DEPENDENCIES.ru.md).
 [Security limitations](SECURITY.md) must be read before deployment.
 
 ## What is included
@@ -54,6 +55,19 @@ Requires an existing Linux Docker Engine with Compose, OpenSSL, a TLS server
 certificate/private key, and a dedicated client CA with a current CRL. The
 scripts do not install software or change firewall rules.
 
+For a fresh Ubuntu installation from the release package:
+
+```sh
+tar -xzf RDP-Token-Ubuntu-0.7.0.tar.gz
+cd RDP-Token-Ubuntu-0.7.0
+sudo sh scripts/install-ubuntu.sh
+```
+
+The installer checks existing Docker Compose and OpenSSL prerequisites, installs
+the application under `/opt/RDP-Token`, creates a protected `.env` and prepares
+the data directory. It does not install OS packages, start containers, overwrite
+an existing installation, configure NAT/firewall or provide certificates.
+
 ```sh
 sh scripts/create-env.sh
 vim .env
@@ -86,11 +100,13 @@ Windows desktop behavior require separate client testing.
 
 ## Release status
 
-`v0.1.0-preview.2` packages the laboratory implementation. Deployment-specific
-defaults were replaced with examples; the tested grant/relay logic was retained.
-The desktop client adds portable public token cards and the final Vovan-T visual
-identity. Windows installer signing, driver redistribution and Linux feature
-parity are not part of this release. No general open-source license is selected yet; public
-visibility is not a grant of redistribution rights beyond applicable platform terms.
+`v0.7.0` packages the current laboratory implementation. Deployment-specific
+defaults are replaced with examples; the tested grant/relay logic is retained.
+The desktop client adds portable public token cards, CRL controls and signed
+administrator challenges. The Ubuntu archive contains a guarded fresh-install
+script. Windows installer signing, driver redistribution and full Linux Manager
+feature parity are not part of this release. No general open-source license is
+selected yet; public visibility is not a grant of redistribution rights beyond
+applicable platform terms.
 
 This is an independent project, not affiliated with Microsoft, Aktiv or ISBC.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — 2026-09-09
+
+- Added CRL management and signed token challenge authentication for administrators.
+- Added portable token-card import/export and expanded Rutoken/ESMART handling.
+- Added the 50-second mode 1 grant: established RDP is independent of the browser.
+- Added a guarded Ubuntu installer for fresh `/opt/RDP-Token` deployments.
+- Updated branding, dialogs, Windows metadata and portable Manager packaging.
+
 ## 0.1.0-preview.2 — 2026-09-03
 
 - Added export of a selected token certificate as a portable public token card.

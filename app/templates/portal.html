@@ -3,7 +3,7 @@
 {% block content %}
 <section class="card">
   <div class="heading-row">
-    <div><h1>Доступные рабочие места</h1><p class="muted">Токен: {{ token.label }}</p></div>
+    <div><h1>Доступные рабочие места</h1><p class="muted">Токен: {{ token.label }} · Ваш IP: {{ client_ip }}</p></div>
     <span class="role role-{{ token.role|lower }}">{{ token.role }}</span>
   </div>
   {% if targets %}

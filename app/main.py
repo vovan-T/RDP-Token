@@ -1,8 +1,11 @@
 import ipaddress
+import base64
 import hashlib
 import os
+import re
 import secrets
 import selectors
+import shutil
 import socket
 import socketserver
 import sqlite3
@@ -11,7 +14,10 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from datetime import datetime
+import urllib.request
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, Response, abort, redirect, render_template, request, session, url_for
 from flask import jsonify
@@ -24,14 +30,30 @@ SECRET = os.getenv("RDP_TOKEN_SECRET", "")
 BOOTSTRAP_ADMIN = os.getenv("RDP_TOKEN_BOOTSTRAP_ADMIN_SERIAL", "").upper().replace(":", "")
 CA_FILE = os.getenv("RDP_TOKEN_CA_FILE", "/certs/client-ca.pem")
 CRL_FILE = os.getenv("RDP_TOKEN_CRL_FILE", "/certs/client.crl.pem")
+MANAGED_CA_FILE = os.getenv(
+    "RDP_TOKEN_MANAGED_CA_FILE", "/data/crl/client-ca-chain.pem",
+)
+MANAGED_CRL_FILE = os.getenv(
+    "RDP_TOKEN_MANAGED_CRL_FILE", "/data/crl/client.crl.pem",
+)
+CRL_URL = os.getenv(
+    "RDP_TOKEN_CRL_URL",
+    "https://pki.example.invalid/crl/client-ca.crl",
+)
+CRL_MAX_BYTES = 2 * 1024 * 1024
+DISPLAY_TIMEZONE_NAME = os.getenv("RDP_TOKEN_TIMEZONE", "Europe/Moscow")
 CLAIM_SECONDS = int(os.getenv("RDP_TOKEN_CLAIM_SECONDS", "50"))
-HEARTBEAT_GRACE_SECONDS = int(os.getenv("RDP_TOKEN_HEARTBEAT_GRACE_SECONDS", "12"))
 PUBLIC_RDP_HOST = os.getenv("RDP_TOKEN_PUBLIC_RDP_HOST", "rdp.example.invalid")
 PORT_MIN = int(os.getenv("RDP_TOKEN_PORT_MIN", "60000"))
 PORT_MAX = int(os.getenv("RDP_TOKEN_PORT_MAX", "60999"))
 RECOVERY_CODE_SECONDS = 30 * 60
 RECOVERY_SESSION_SECONDS = 30 * 60
 ADMIN_SESSION_SECONDS = 30 * 60
+CHALLENGE_SECONDS = 30
+CHALLENGE_LIMIT = 512
+
+admin_challenges = {}
+admin_challenges_lock = threading.Lock()
 
 if not 1 <= PORT_MIN <= PORT_MAX <= 65535:
     raise RuntimeError("RDP token gateway port range is invalid")
@@ -224,7 +246,9 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 
 
 def require_csrf():
-    if not secrets.compare_digest(session.get("csrf", ""), request.form.get("csrf", "")):
+    expected = session.get("csrf", "")
+    provided = request.form.get("csrf", "")
+    if not expected or not provided or not secrets.compare_digest(expected, provided):
         abort(400, "CSRF validation failed")
 
 
@@ -274,15 +298,44 @@ def verify_leaf_certificate():
     pem = urllib.parse.unquote(encoded)
     if "-----BEGIN CERTIFICATE-----" not in pem:
         abort(403, "Client certificate was not forwarded")
+    valid, _identity, _detail = validate_client_certificate(pem)
+    if not valid:
+        abort(403, "Certificate is revoked or CRL verification failed")
+
+
+def validate_client_certificate(pem):
+    """Validate a presented leaf and return its identity without trusting headers."""
     fd, path = tempfile.mkstemp(prefix="rdp-token-", suffix=".pem")
     try:
         with os.fdopen(fd, "w", encoding="ascii") as handle:
             handle.write(pem)
-        result = subprocess.run(
-            ["/usr/bin/openssl", "verify", "-CAfile", CA_FILE, "-CRLfile", CRL_FILE,
-             "-crl_check", path], capture_output=True, text=True, timeout=10, check=False)
-        if result.returncode != 0:
-            abort(403, "Certificate is revoked or CRL verification failed")
+        errors = []
+        for ca_path, crl_path, label in (
+            (MANAGED_CA_FILE, MANAGED_CRL_FILE, "managed"),
+            (CA_FILE, CRL_FILE, "legacy"),
+        ):
+            if not os.path.isfile(ca_path) or not os.path.isfile(crl_path):
+                continue
+            valid, detail = _certificate_valid_for_crl_pair(path, ca_path, crl_path)
+            if valid:
+                serial_result = subprocess.run(
+                    ["/usr/bin/openssl", "x509", "-in", path, "-noout", "-serial"],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                serial = normalize_serial(serial_result.stdout.partition("=")[2])
+                identity = {
+                    "serial": serial,
+                    "subject": _openssl_identity(path, "x509", "subject"),
+                    "issuer": _openssl_identity(path, "x509", "issuer"),
+                    "ca": label,
+                }
+                if serial:
+                    return True, identity, "OK"
+                return False, {}, "Не удалось прочитать серийный номер сертификата"
+            errors.append(f"{label}: {detail}")
+        if not errors:
+            return False, {}, "No CA and CRL pair is configured"
+        return False, {}, "; ".join(errors)
     finally:
         try:
             os.unlink(path)
@@ -290,12 +343,267 @@ def verify_leaf_certificate():
             pass
 
 
+def _verify_challenge_signature(certificate_pem, challenge, signature):
+    cert_fd, cert_path = tempfile.mkstemp(prefix="rdp-token-cert-", suffix=".pem")
+    data_fd, data_path = tempfile.mkstemp(prefix="rdp-token-data-", suffix=".bin")
+    sig_fd, sig_path = tempfile.mkstemp(prefix="rdp-token-signature-", suffix=".bin")
+    pub_path = cert_path + ".pub"
+    try:
+        with os.fdopen(cert_fd, "w", encoding="ascii") as handle:
+            handle.write(certificate_pem)
+        with os.fdopen(data_fd, "wb") as handle:
+            handle.write(challenge)
+        with os.fdopen(sig_fd, "wb") as handle:
+            handle.write(signature)
+        public_key = subprocess.run(
+            ["/usr/bin/openssl", "x509", "-in", cert_path, "-pubkey", "-noout"],
+            capture_output=True, timeout=10, check=False,
+        )
+        if public_key.returncode != 0:
+            return False
+        with open(pub_path, "wb") as handle:
+            handle.write(public_key.stdout)
+        verified = subprocess.run(
+            ["/usr/bin/openssl", "dgst", "-sha256", "-verify", pub_path,
+             "-signature", sig_path, data_path],
+            capture_output=True, timeout=10, check=False,
+        )
+        return verified.returncode == 0
+    finally:
+        for candidate in (cert_path, data_path, sig_path, pub_path):
+            try:
+                os.unlink(candidate)
+            except FileNotFoundError:
+                pass
+
+
+def _read_crl(path):
+    last_error = ""
+    for inform in ("PEM", "DER"):
+        result = subprocess.run(
+            ["/usr/bin/openssl", "crl", "-inform", inform, "-in", path,
+             "-noout", "-issuer", "-lastupdate", "-nextupdate", "-crlnumber"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if result.returncode == 0:
+            values = {}
+            for line in result.stdout.splitlines():
+                key, marker, value = line.partition("=")
+                if marker:
+                    values[key.strip().lower()] = value.strip()
+            text_result = subprocess.run(
+                ["/usr/bin/openssl", "crl", "-inform", inform, "-in", path,
+                 "-noout", "-text"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            text_value = text_result.stdout if text_result.returncode == 0 else ""
+            return {
+                "format": inform,
+                "issuer": values.get("issuer", ""),
+                "last_update_raw": values.get("lastupdate", ""),
+                "next_update_raw": values.get("nextupdate", ""),
+                "crl_number": values.get("crlnumber", ""),
+                "revoked_count": text_value.count("Serial Number:"),
+            }
+        last_error = (result.stderr or result.stdout).strip()
+    raise RuntimeError("Файл не является CRL: " + (last_error or "неизвестный формат"))
+
+
+def _crl_time(value):
+    if not value:
+        return None
+    parsed = parsedate_to_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone()
+
+
+def _display_time(value):
+    if value is None:
+        return ""
+    try:
+        display_zone = ZoneInfo(DISPLAY_TIMEZONE_NAME)
+    except ZoneInfoNotFoundError:
+        display_zone = timezone.utc
+    return value.astimezone(display_zone).strftime("%d.%m.%Y %H:%M %Z")
+
+
+def _verify_crl_signature(path, inform, ca_file=MANAGED_CA_FILE):
+    result = subprocess.run(
+        ["/usr/bin/openssl", "crl", "-inform", inform, "-in", path,
+         "-noout", "-verify", "-CAfile", ca_file],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    return result.returncode == 0, (result.stderr or result.stdout).strip()
+
+
+def _openssl_identity(path, object_type, field, inform=None):
+    command = ["/usr/bin/openssl", object_type]
+    if inform:
+        command.extend(["-inform", inform])
+    command.extend(["-in", path, "-noout", f"-{field}", "-nameopt", "RFC2253"])
+    result = subprocess.run(
+        command, capture_output=True, text=True, timeout=10, check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip().partition("=")[2].strip()
+
+
+def _certificate_valid_for_crl_pair(certificate_path, ca_path, crl_path):
+    chain = subprocess.run(
+        ["/usr/bin/openssl", "verify", "-CAfile", ca_path, certificate_path],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if chain.returncode != 0:
+        return False, (chain.stderr or chain.stdout).strip()
+    try:
+        metadata = _read_crl(crl_path)
+        last_update = _crl_time(metadata["last_update_raw"])
+        next_update = _crl_time(metadata["next_update_raw"])
+    except (RuntimeError, ValueError) as exc:
+        return False, str(exc)
+    now = datetime.now().astimezone()
+    if not last_update or not next_update or last_update > now or next_update <= now:
+        return False, "CRL ещё не действует или уже просрочен"
+    signature_valid, signature_error = _verify_crl_signature(
+        crl_path, metadata["format"], ca_path,
+    )
+    if not signature_valid:
+        return False, signature_error or "Неверная подпись CRL"
+    certificate_issuer = _openssl_identity(certificate_path, "x509", "issuer")
+    crl_issuer = _openssl_identity(crl_path, "crl", "issuer", metadata["format"])
+    if not certificate_issuer or certificate_issuer != crl_issuer:
+        return False, "CRL выпущен другим CA"
+    serial_result = subprocess.run(
+        ["/usr/bin/openssl", "x509", "-in", certificate_path, "-noout", "-serial"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if serial_result.returncode != 0:
+        return False, "Не удалось прочитать серийный номер сертификата"
+    certificate_serial = normalize_serial(serial_result.stdout.partition("=")[2])
+    text_result = subprocess.run(
+        ["/usr/bin/openssl", "crl", "-inform", metadata["format"], "-in", crl_path,
+         "-noout", "-text"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if text_result.returncode != 0:
+        return False, "Не удалось прочитать список отозванных сертификатов"
+    revoked_serials = {
+        normalize_serial(value)
+        for value in re.findall(r"Serial Number:\s*([0-9A-Fa-f:]+)", text_result.stdout)
+    }
+    if certificate_serial in revoked_serials:
+        return False, "Сертификат отозван"
+    return True, "OK"
+
+
+def crl_status():
+    status = {
+        "url": CRL_URL,
+        "local_file": MANAGED_CRL_FILE,
+        "file_name": os.path.basename(urllib.parse.urlparse(CRL_URL).path),
+        "available": False,
+        "signature_valid": False,
+        "current": False,
+        "issuer": "",
+        "last_update": "",
+        "next_update": "",
+        "crl_number": "",
+        "revoked_count": 0,
+        "downloaded_at": "",
+        "error": "",
+    }
+    try:
+        metadata = _read_crl(MANAGED_CRL_FILE)
+        signature_valid, signature_error = _verify_crl_signature(
+            MANAGED_CRL_FILE, metadata["format"],
+        )
+        last_update = _crl_time(metadata["last_update_raw"])
+        next_update = _crl_time(metadata["next_update_raw"])
+        now = datetime.now().astimezone()
+        status.update({
+            "available": True,
+            "signature_valid": signature_valid,
+            "current": bool(signature_valid and last_update and next_update
+                            and last_update <= now and next_update > now),
+            "issuer": metadata["issuer"],
+            "last_update": _display_time(last_update),
+            "next_update": _display_time(next_update),
+            "crl_number": metadata["crl_number"],
+            "revoked_count": metadata["revoked_count"],
+            "downloaded_at": _display_time(datetime.fromtimestamp(
+                os.path.getmtime(MANAGED_CRL_FILE), tz=timezone.utc,
+            )),
+            "error": "" if signature_valid else (signature_error or "Неверная подпись CRL"),
+        })
+    except (OSError, RuntimeError, ValueError) as exc:
+        status["error"] = str(exc)
+    return status
+
+
+def refresh_crl():
+    parsed_url = urllib.parse.urlparse(CRL_URL)
+    if parsed_url.scheme != "https" or not parsed_url.netloc:
+        raise RuntimeError("CRL URL должен использовать HTTPS")
+    request_value = urllib.request.Request(
+        CRL_URL, headers={"User-Agent": "RDP-Token CRL updater/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(request_value, timeout=20) as response:
+            if response.status != 200:
+                raise RuntimeError(f"CRL сервер вернул HTTP {response.status}")
+            source = response.read(CRL_MAX_BYTES + 1)
+    except Exception as exc:
+        raise RuntimeError(f"Не удалось скачать CRL: {exc}") from exc
+    if len(source) > CRL_MAX_BYTES:
+        raise RuntimeError("CRL превышает допустимый размер 2 МиБ")
+
+    directory = os.path.dirname(MANAGED_CRL_FILE)
+    os.makedirs(directory, exist_ok=True)
+    source_fd, source_path = tempfile.mkstemp(prefix="crl-download-", dir=directory)
+    normalized_fd, normalized_path = tempfile.mkstemp(prefix="crl-verified-", dir=directory)
+    os.close(normalized_fd)
+    try:
+        with os.fdopen(source_fd, "wb") as handle:
+            handle.write(source)
+        metadata = _read_crl(source_path)
+        last_update = _crl_time(metadata["last_update_raw"])
+        next_update = _crl_time(metadata["next_update_raw"])
+        now = datetime.now().astimezone()
+        if not last_update or not next_update or last_update > now or next_update <= now:
+            raise RuntimeError("Скачанный CRL ещё не действует или уже просрочен")
+        signature_valid, signature_error = _verify_crl_signature(
+            source_path, metadata["format"],
+        )
+        if not signature_valid:
+            raise RuntimeError("Подпись CRL не соответствует доверенному CA: "
+                               + (signature_error or "проверка не пройдена"))
+        conversion = subprocess.run(
+            ["/usr/bin/openssl", "crl", "-inform", metadata["format"],
+             "-in", source_path, "-out", normalized_path, "-outform", "PEM"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if conversion.returncode != 0:
+            raise RuntimeError("Не удалось преобразовать CRL в PEM")
+        if os.path.exists(MANAGED_CRL_FILE):
+            shutil.copy2(MANAGED_CRL_FILE, MANAGED_CRL_FILE + ".previous")
+        os.chmod(normalized_path, 0o644)
+        os.replace(normalized_path, MANAGED_CRL_FILE)
+    finally:
+        for temporary in (source_path, normalized_path):
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+    return crl_status()
+
+
 class GateState:
     def __init__(self):
         self.lock = threading.RLock()
         self.pending = {}
         self.active = set()
-        self.heartbeats = {}
         self.servers = {}
 
     def grant(self, target_id, serial, web_ip):
@@ -303,16 +611,7 @@ class GateState:
         with self.lock:
             self.pending[target_id] = {"serial": serial, "web_ip": web_ip,
                                        "deadline": now + CLAIM_SECONDS}
-            self.heartbeats[serial] = now + HEARTBEAT_GRACE_SECONDS
         print(f"RDP GRANT target={target_id} web_ip={web_ip} window={CLAIM_SECONDS}s", flush=True)
-
-    def heartbeat(self, serial):
-        with self.lock:
-            self.heartbeats[serial] = time.monotonic() + HEARTBEAT_GRACE_SECONDS
-
-    def heartbeat_alive(self, serial):
-        with self.lock:
-            return self.heartbeats.get(serial, 0) > time.monotonic()
 
     def claim(self, target_id, source_ip):
         now = time.monotonic()
@@ -479,7 +778,7 @@ def make_rdp_handler(target):
 def portal():
     if not request.headers.get("X-Client-Cert"):
         return render_template("token_required.html"), 403
-    token, _ = client_identity()
+    token, client_ip = client_identity()
     with db() as con:
         targets = con.execute(
             "SELECT t.* FROM targets t JOIN token_targets g ON g.target_id=t.id "
@@ -488,7 +787,7 @@ def portal():
             "SELECT l.*,t.name FROM access_log l JOIN targets t ON t.id=l.target_id "
             "WHERE l.token_serial=? ORDER BY l.id DESC LIMIT 20", (token["serial"],)).fetchall()
     return render_template("portal.html", token=token, targets=targets, recent=recent,
-                           public_host=PUBLIC_RDP_HOST)
+                           public_host=PUBLIC_RDP_HOST, client_ip=client_ip)
 
 
 @app.post("/open")
@@ -507,13 +806,6 @@ def open_access():
             opened.append(target)
     return render_template("opened.html", token=token, targets=opened,
                            claim_seconds=CLAIM_SECONDS, public_host=PUBLIC_RDP_HOST)
-
-
-@app.post("/heartbeat")
-def heartbeat():
-    token, _ = client_identity()
-    gate.heartbeat(token["serial"])
-    return Response(status=204, headers={"Connection": "close", "Cache-Control": "no-store"})
 
 
 @app.get("/rdp/<int:target_id>.rdp")
@@ -571,7 +863,17 @@ def admin():
                            pending_tokens=pending_tokens,
                            port_min=port_min, port_max=port_max,
                            active_sessions=active_sessions, free_ports=free_ports,
-                           listening_ids=listening_ids)
+                           listening_ids=listening_ids, crl=crl_status())
+
+
+@app.post("/admin/crl/refresh")
+def admin_refresh_crl():
+    require_csrf(); require_admin()
+    try:
+        refresh_crl()
+    except RuntimeError as exc:
+        abort(409, str(exc))
+    return redirect(url_for("admin") + "#crl")
 
 
 @app.post("/admin/token")
@@ -816,6 +1118,89 @@ def api_admin_session():
     return response
 
 
+@app.post("/api/admin/challenge")
+def api_admin_challenge():
+    data = api_json()
+    certificate_pem = str(data.get("certificate_pem", ""))
+    if "-----BEGIN CERTIFICATE-----" not in certificate_pem:
+        abort(400, "Client certificate is missing")
+    valid, identity, detail = validate_client_certificate(certificate_pem)
+    if not valid:
+        abort(403, detail)
+    with db() as con:
+        token = con.execute(
+            "SELECT * FROM tokens WHERE serial=? AND role='ADMIN' AND enabled=1",
+            (identity["serial"],),
+        ).fetchone()
+    if token is None:
+        abort(403, "Token is not an enabled administrator")
+
+    now = int(time.time())
+    challenge_id = secrets.token_urlsafe(24)
+    challenge = b"RDP-Token admin login\x00" + secrets.token_bytes(32)
+    with admin_challenges_lock:
+        expired = [key for key, item in admin_challenges.items()
+                   if item["expires_at"] <= now]
+        for key in expired:
+            admin_challenges.pop(key, None)
+        while len(admin_challenges) >= CHALLENGE_LIMIT:
+            oldest = min(admin_challenges, key=lambda key: admin_challenges[key]["created_at"])
+            admin_challenges.pop(oldest, None)
+        admin_challenges[challenge_id] = {
+            "created_at": now,
+            "expires_at": now + CHALLENGE_SECONDS,
+            "certificate_pem": certificate_pem,
+            "serial": identity["serial"],
+            "challenge": challenge,
+        }
+    response = jsonify({
+        "challenge_id": challenge_id,
+        "challenge": base64.b64encode(challenge).decode("ascii"),
+        "algorithm": "SHA256",
+        "expires_in": CHALLENGE_SECONDS,
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/api/admin/challenge/verify")
+def api_admin_challenge_verify():
+    data = api_json()
+    challenge_id = str(data.get("challenge_id", ""))
+    try:
+        signature = base64.b64decode(str(data.get("signature", "")), validate=True)
+    except (ValueError, TypeError):
+        abort(400, "Signature is not valid Base64")
+    now = int(time.time())
+    with admin_challenges_lock:
+        item = admin_challenges.pop(challenge_id, None)
+    if item is None or item["expires_at"] <= now:
+        abort(401, "Challenge is invalid, expired or already used")
+    with db() as con:
+        token = con.execute(
+            "SELECT * FROM tokens WHERE serial=? AND role='ADMIN' AND enabled=1",
+            (item["serial"],),
+        ).fetchone()
+    if token is None:
+        abort(403, "Token is not an enabled administrator")
+    if not signature or not _verify_challenge_signature(
+            item["certificate_pem"], item["challenge"], signature):
+        abort(401, "Token signature verification failed")
+
+    session_value = secrets.token_urlsafe(32)
+    with db() as con:
+        con.execute("DELETE FROM admin_sessions WHERE token_serial=? OR expires_at<=?",
+                    (item["serial"], now))
+        con.execute(
+            "INSERT INTO admin_sessions(session_hash,token_serial,created_at,expires_at) "
+            "VALUES(?,?,?,?)",
+            (secret_hash(session_value), item["serial"], now, now + ADMIN_SESSION_SECONDS),
+        )
+    response = jsonify({"session": session_value, "expires_in": ADMIN_SESSION_SECONDS})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def admin_state_payload():
     with db() as con:
         tokens = [dict(row) for row in con.execute("SELECT * FROM tokens ORDER BY label")]
@@ -841,7 +1226,7 @@ def admin_state_payload():
     return {"tokens": tokens, "pending_tokens": pending, "targets": targets,
             "grants": grants, "logs": logs, "port_min": port_min,
             "port_max": port_max, "active_sessions": active_sessions,
-            "free_ports": free_ports}
+            "free_ports": free_ports, "crl": crl_status()}
 
 
 @app.get("/api/admin/state")
@@ -857,7 +1242,13 @@ def api_admin_action():
     api_admin()
     data = api_json()
     action = data.get("action")
-    if action == "token_approve":
+    result_payload = {"ok": True}
+    if action == "crl_refresh":
+        try:
+            result_payload["crl"] = refresh_crl()
+        except RuntimeError as exc:
+            abort(409, str(exc))
+    elif action == "token_approve":
         serial = normalize_serial(str(data.get("serial", "")))
         label, role = str(data.get("label", "")).strip(), str(data.get("role", "USER"))
         if not serial or not label or role not in {"USER", "ADMIN"}:
@@ -995,7 +1386,7 @@ def api_admin_action():
                             (serial, target_id))
     else:
         abort(400, "Unknown action")
-    return jsonify({"ok": True})
+    return jsonify(result_payload)
 
 
 def main():

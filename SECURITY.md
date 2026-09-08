@@ -12,8 +12,8 @@ a security certification.
    client can claim that window. Later retries bind to the first source IP;
    clients sharing a NAT address are not distinguishable.
 2. **No removal enforcement:** closing the browser or removing the physical token
-   does not close established RDP. Browser heartbeats remain present but do not
-   govern the TCP connection's lifetime. Expiring a grant only blocks new TCP.
+   does not close established RDP. There is no browser heartbeat in mode 1.
+   Expiring a grant only blocks new TCP connections.
 3. **Trusted local boundary:** the Flask backend trusts certificate/identity
    headers supplied by nginx. Keep it on loopback on a dedicated trusted host;
    any untrusted local process or host-network container can reach it. Never

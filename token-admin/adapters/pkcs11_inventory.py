@@ -1,10 +1,10 @@
 import ctypes
 import os
 import platform
-import sys
 from pathlib import Path
 
 from core.certificate_fields import name_fields
+from adapters.tool_paths import lib_file
 
 try:
     from cryptography import x509
@@ -99,10 +99,6 @@ class CK_SLOT_INFO(ctypes.Structure):
         ("hardwareVersion", CK_VERSION),
         ("firmwareVersion", CK_VERSION),
     ]
-
-
-def _root() -> Path:
-    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 
 
 def _function(pointer, *arguments):
@@ -218,7 +214,7 @@ def _select_slot(table, expected_serial: str):
 def read_rutoken_slots() -> list[dict]:
     if platform.system() != "Windows":
         return []
-    module = _root() / "vendor" / "rutoken" / "runtime" / "windows-x64" / "rtpkcs11ecp.dll"
+    module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
     library = ctypes.CDLL(str(module))
     get_list = library.C_GetFunctionList
     get_list.argtypes = [ctypes.POINTER(ctypes.POINTER(CK_FUNCTION_LIST))]
@@ -391,9 +387,9 @@ def verify_user_pin(vendor: str, serial: str, pin: str) -> None:
     if platform.system() != "Windows":
         raise RuntimeError("Проверка PIN сейчас поддерживается только в Windows")
     if vendor == "Aktiv":
-        module = _root() / "vendor" / "rutoken" / "runtime" / "windows-x64" / "rtpkcs11ecp.dll"
+        module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
     elif vendor == "ISBC":
-        system_module = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "isbc_pkcs11_main.dll"
+        system_module = lib_file("isbc_pkcs11_main.dll", "isbc_pkcs11_main.dll")
         if not system_module.is_file():
             raise RuntimeError("Не установлен системный PKCS#11-драйвер ESMART")
         module = system_module
@@ -444,9 +440,9 @@ def change_user_pin(vendor: str, serial: str, old_pin: str, new_pin: str) -> Non
     if platform.system() != "Windows":
         raise RuntimeError("Смена PIN сейчас поддерживается только в Windows")
     if vendor == "Aktiv":
-        module = _root() / "vendor" / "rutoken" / "runtime" / "windows-x64" / "rtpkcs11ecp.dll"
+        module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
     elif vendor == "ISBC":
-        module = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "isbc_pkcs11_main.dll"
+        module = lib_file("isbc_pkcs11_main.dll", "isbc_pkcs11_main.dll")
         if not module.is_file():
             raise RuntimeError("Не установлен системный PKCS#11-драйвер ESMART")
     else:
@@ -498,9 +494,9 @@ def delete_object(vendor: str, serial: str, object_class: int, object_id_hex: st
     if platform.system() != "Windows":
         raise RuntimeError("Удаление объектов сейчас поддерживается только в Windows")
     if vendor == "Aktiv":
-        module = _root() / "vendor" / "rutoken" / "runtime" / "windows-x64" / "rtpkcs11ecp.dll"
+        module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
     elif vendor == "ISBC":
-        module = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "isbc_pkcs11_main.dll"
+        module = lib_file("isbc_pkcs11_main.dll", "isbc_pkcs11_main.dll")
         if not module.is_file():
             raise RuntimeError("Не установлен системный PKCS#11-драйвер ESMART")
     else:
@@ -575,9 +571,9 @@ def initialize_token(vendor: str, serial: str, label: str, so_pin: str, user_pin
     if platform.system() != "Windows":
         raise RuntimeError("Инициализация токена сейчас поддерживается только в Windows")
     if vendor == "Aktiv":
-        module = _root() / "vendor" / "rutoken" / "runtime" / "windows-x64" / "rtpkcs11ecp.dll"
+        module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
     elif vendor == "ISBC":
-        module = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "isbc_pkcs11_main.dll"
+        module = lib_file("isbc_pkcs11_main.dll", "isbc_pkcs11_main.dll")
         if not module.is_file():
             raise RuntimeError("Не установлен системный PKCS#11-драйвер ESMART")
     else:

@@ -28,10 +28,12 @@ exports are written locally; this application is not entirely stateless.
 - Other PC/SC devices: inventory; Windows KSP fallback only where a compatible
   provider is actually available. Generic compatibility is not promised.
 
-Driver/runtime binaries are **not included**. See [vendor/README.md](vendor/README.md)
-for the directories expected by the adapters. A source-only installation can
-show missing-tool errors until those prerequisites are supplied. Remote USB
-passthrough to the Docker gateway is not required.
+Driver/runtime binaries are **not included** in the public release. See
+[vendor/README.md](vendor/README.md) for their sources and licensing boundary.
+The current portable layout is one flat `lib` directory beside the EXE; source
+runs use `token-admin/lib`. A source-only installation can show missing-tool
+errors until those prerequisites are supplied. Remote USB passthrough to the
+Docker gateway is not required.
 
 The UI can inspect certificates/public keys, create keys and CSR requests,
 install matching signed certificates, change PINs/labels and perform supported
@@ -46,6 +48,23 @@ identity when the physical token cannot be connected to the administrator's PC.
 Importing the card grants nothing by itself: the administrator still assigns the
 token to selected systems in the management tab.
 
+## Administrator login
+
+Token Manager does not export a private key and does not send the PIN to the
+gateway. The gateway returns a random one-use challenge valid for 30 seconds;
+the selected token signs it locally and the gateway verifies the signature,
+certificate chain, current CRL, registered certificate serial and ADMIN role.
+The resulting bearer session is time-limited. Reusing the same challenge is
+rejected.
+
+RSA Rutoken models use their PKCS#11 module directly, including the selected
+token serial and certificate CKA_ID. Other devices use the Windows provider only
+when that provider exposes the certificate and its private key to the current
+user. RSA and ECDSA are supported by that fallback; GOST signing still depends
+on a compatible provider on both client and server. The older Windows-store
+mTLS exchange remains in the source as a temporary compatibility fallback but
+is no longer the normal UI login path.
+
 ## Local EXE build
 
 The release may include an unsigned convenience EXE built from this public tree.
@@ -58,6 +77,6 @@ powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
 
 The output is `dist\RDP-Token-Manager.exe`. The script bundles our assets but
 does not bundle any vendor binaries. If needed for your own authorized deployment,
-place vendor files in `dist\vendor\...` according to vendor/README.md. Review
+place vendor files in `dist\lib\` according to vendor/README.md. Review
 redistribution terms before sharing them. This preview does not provide signed
 installers or claim that every token works without driver installation.

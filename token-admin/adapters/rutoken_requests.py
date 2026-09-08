@@ -132,6 +132,79 @@ def supports_rutoken_sdk(model: str) -> bool:
     ))
 
 
+def sign_rutoken_challenge(serial: str, model: str, key_id_hex: str,
+                           pin: str, challenge: bytes) -> bytes:
+    """Sign a server nonce with the selected non-exportable token key."""
+    if not key_id_hex:
+        raise RuntimeError("У сертификата не найден CKA_ID связанного закрытого ключа")
+    module = _module_for(model)
+    library = ctypes.CDLL(str(module))
+    library.C_Initialize.argtypes = [ctypes.c_void_p]
+    library.C_Initialize.restype = ctypes.c_ulong
+    library.C_Finalize.argtypes = [ctypes.c_void_p]
+    library.C_Finalize.restype = ctypes.c_ulong
+    library.C_OpenSession.argtypes = [ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p,
+                                      ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    library.C_OpenSession.restype = ctypes.c_ulong
+    library.C_CloseSession.argtypes = [ctypes.c_ulong]
+    library.C_CloseSession.restype = ctypes.c_ulong
+    library.C_Login.argtypes = [ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p,
+                                ctypes.c_ulong]
+    library.C_Login.restype = ctypes.c_ulong
+    library.C_Logout.argtypes = [ctypes.c_ulong]
+    library.C_Logout.restype = ctypes.c_ulong
+    library.C_FindObjectsInit.argtypes = [ctypes.c_ulong, ctypes.POINTER(CK_ATTRIBUTE),
+                                           ctypes.c_ulong]
+    library.C_FindObjectsInit.restype = ctypes.c_ulong
+    library.C_FindObjects.argtypes = [ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+                                       ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
+    library.C_FindObjects.restype = ctypes.c_ulong
+    library.C_FindObjectsFinal.argtypes = [ctypes.c_ulong]
+    library.C_FindObjectsFinal.restype = ctypes.c_ulong
+    library.C_SignInit.argtypes = [ctypes.c_ulong, ctypes.POINTER(CK_MECHANISM),
+                                    ctypes.c_ulong]
+    library.C_SignInit.restype = ctypes.c_ulong
+    library.C_Sign.argtypes = [ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+                                ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    library.C_Sign.restype = ctypes.c_ulong
+
+    initialized = int(library.C_Initialize(None))
+    if initialized not in (CKR_OK, CKR_CRYPTOKI_ALREADY_INITIALIZED):
+        _check("Инициализация Rutoken", initialized)
+    initialized_here = initialized == CKR_OK
+    session = ctypes.c_ulong()
+    logged_in = False
+    try:
+        direct_table = type("_DirectTable", (), {
+            "C_GetSlotList": ctypes.cast(library.C_GetSlotList, ctypes.c_void_p).value,
+            "C_GetTokenInfo": ctypes.cast(library.C_GetTokenInfo, ctypes.c_void_p).value,
+        })
+        slot = _select_slot(direct_table, serial)
+        _check("Открытие выбранного Rutoken", int(library.C_OpenSession(
+            slot, CKF_SERIAL_SESSION, None, None, ctypes.byref(session))))
+        pin_bytes = bytearray(pin.encode("utf-8"))
+        pin_buffer = (ctypes.c_ubyte * len(pin_bytes)).from_buffer(pin_bytes)
+        result = int(library.C_Login(session.value, CKU_USER,
+                                     ctypes.cast(pin_buffer, ctypes.c_void_p), len(pin_bytes)))
+        for index in range(len(pin_bytes)):
+            pin_bytes[index] = 0
+        if result not in (CKR_OK, CKR_USER_ALREADY_LOGGED_IN):
+            _check("Вход по PIN", result)
+        logged_in = True
+        private_key = _find_object_by_id(
+            library, session.value, CKO_PRIVATE_KEY, bytes.fromhex(key_id_hex))
+        if not private_key:
+            raise RuntimeError("На выбранном токене не найден связанный закрытый ключ")
+        return _sign(library, session.value, private_key, challenge)
+    finally:
+        if session.value:
+            if logged_in:
+                library.C_Logout(session.value)
+            library.C_CloseSession(session.value)
+        if initialized_here:
+            library.C_Finalize(None)
+
+
 def rutoken_rsa_key_sizes(serial: str, model: str) -> tuple[int, ...]:
     """Возвращает реальные размеры RSA из CKM_RSA_PKCS_KEY_PAIR_GEN."""
     module = _module_for(model)
