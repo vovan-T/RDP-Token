@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1 — 2026-09-09
+
+- Token and certificate inventory now runs outside the Tk GUI thread.
+- Added an indeterminate progress indicator and explicit busy status while scanning.
+- Added a rotating local diagnostic journal with a built-in viewer.
+- Inventory diagnostics identify PC/SC, Rutoken utility, PKCS#11, Windows CSP/KSP
+  and ESMART stages without recording PINs or private-key material.
+- Corrected the web access hint: a physical token with an accessible private key
+  is required by the intended deployment model.
+
 ## 0.7.0 — 2026-09-09
 
 - Added CRL management and signed token challenge authentication for administrators.

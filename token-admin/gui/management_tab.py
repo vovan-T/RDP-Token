@@ -1,6 +1,7 @@
 import tkinter as tk
 import queue
 import threading
+import time
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from adapters.server_admin import (
@@ -10,7 +11,11 @@ from adapters.server_admin import (
 from adapters.token_signing import sign_token_challenge
 from gui.icons import CenteredToplevel, action_button
 from core.token_exchange import load_file, normalize_serial
+from core.diagnostics import logger
 from gui.token_exchange_dialogs import ImportTokenDialog, export_card
+
+
+LOG = logger()
 
 
 class PhysicalTokenDialog(CenteredToplevel):
@@ -366,11 +371,17 @@ class ManagementFrame(ttk.Frame):
             return
         self._busy = True
         self.status.configure(text="Выполняется…")
+        started = time.monotonic()
+        LOG.info("Management operation start: %s", error_title)
 
         def run():
             try:
                 self._result_queue.put((True, worker(), success, error_title))
             except Exception as exc:
+                LOG.exception(
+                    "Management operation failed: %s duration=%.2fs error=%s",
+                    error_title, time.monotonic() - started, exc,
+                )
                 self._result_queue.put((False, exc, success, error_title))
 
         threading.Thread(target=run, daemon=True).start()
@@ -384,6 +395,7 @@ class ManagementFrame(ttk.Frame):
             return
         self._busy = False
         if ok:
+            LOG.info("Management operation done: %s", error_title)
             success(value)
         else:
             if self.crl_dialog is not None and self.crl_dialog.winfo_exists():

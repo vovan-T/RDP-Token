@@ -1,6 +1,9 @@
 import json
+import os
 import platform
+import queue
 import tempfile
+import threading
 import tkinter as tk
 import webbrowser
 import zipfile
@@ -12,6 +15,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 
 from core.inventory import scan_inventory
+from core.diagnostics import configure_logging, log_path, logger
 from adapters.pkcs11_inventory import change_user_pin, delete_object, initialize_token, verify_user_pin
 from adapters.esmart_requests import create_esmart_request, install_esmart_certificate
 from adapters.rutoken_requests import (
@@ -26,6 +30,61 @@ from core.version import APP_BRAND, APP_NAME, APP_VERSION, SUPPORTED_TOKENS
 from gui.icons import CenteredToplevel, ToolTip, action_button, icon_button, load_icons, resource_root
 from gui.management_tab import ManagementFrame
 from gui.token_exchange_dialogs import export_card
+
+
+LOG = configure_logging()
+
+
+class LogDialog(CenteredToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Диагностический журнал")
+        self.geometry("900x520")
+        self.minsize(680, 360)
+        self.transient(parent)
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=str(log_path()), style="Muted.TLabel").pack(anchor="w", pady=(0, 7))
+        text_frame = ttk.Frame(body)
+        text_frame.pack(fill="both", expand=True)
+        self.text = tk.Text(text_frame, wrap="none", font=("Consolas", 9), state="disabled")
+        vertical = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
+        horizontal = ttk.Scrollbar(text_frame, orient="horizontal", command=self.text.xview)
+        self.text.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        text_frame.rowconfigure(0, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(9, 0))
+        action_button(buttons, "Обновить", self.refresh).pack(side="left")
+        action_button(buttons, "Открыть папку", self.open_folder).pack(side="left", padx=(7, 0))
+        action_button(buttons, "Закрыть", self.destroy).pack(side="right")
+        self.refresh()
+
+    def refresh(self):
+        path = log_path()
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, 2)
+                size = stream.tell()
+                stream.seek(max(0, size - 512 * 1024))
+                content = stream.read().decode("utf-8", errors="replace")
+        except OSError as exc:
+            content = f"Журнал пока недоступен: {exc}"
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", content)
+        self.text.configure(state="disabled")
+        self.text.see("end")
+
+    def open_folder(self):
+        folder = log_path().parent
+        try:
+            os.startfile(folder)
+        except (AttributeError, OSError) as exc:
+            messagebox.showerror("Журнал", str(exc), parent=self)
 
 
 class SettingsDialog(CenteredToplevel):
@@ -482,6 +541,9 @@ class TokenAdmin(tk.Tk):
         self.minsize(900, 480)
         self.tokens = []
         self.selected_token = None
+        self._scan_in_progress = False
+        self._scan_again = False
+        self._scan_results = queue.Queue()
         self.settings = load_settings()
         self._configure_style()
         self.icons = load_icons(self)
@@ -534,8 +596,10 @@ class TokenAdmin(tk.Tk):
                     "Информация").pack(side="right")
         icon_button(heading, self.icons["settings"], self.open_settings,
                     "Настройки").pack(side="right", padx=(0, 7))
-        icon_button(heading, self.icons["refresh"], self.refresh,
-                    "Обновить список токенов").pack(side="right", padx=(0, 7))
+        self.refresh_action = icon_button(
+            heading, self.icons["refresh"], self.refresh, "Обновить список токенов"
+        )
+        self.refresh_action.pack(side="right", padx=(0, 7))
 
         content = ttk.Panedwindow(token_page, orient="horizontal")
         content.pack(fill="both", expand=True, padx=16, pady=(0, 10))
@@ -613,9 +677,17 @@ class TokenAdmin(tk.Tk):
         self.delete_object_action.pack(side="right")
         action_button(object_actions, "Экспорт токена...", self.export_token_card).pack(side="left")
 
-        self.status = ttk.Label(token_page, padding=(16, 8), relief="sunken", anchor="w",
-                                text=f"ОС: {platform.system()} · ожидание сканирования")
-        self.status.pack(fill="x")
+        status_bar = ttk.Frame(token_page, relief="sunken", padding=(12, 6))
+        status_bar.pack(fill="x")
+        self.status = ttk.Label(
+            status_bar, anchor="w", text=f"ОС: {platform.system()} · ожидание сканирования"
+        )
+        self.status.pack(side="left", fill="x", expand=True)
+        self.log_action = action_button(status_bar, "Журнал", lambda: LogDialog(self))
+        self.log_action.pack(side="right", padx=(10, 0))
+        self.scan_progress = ttk.Progressbar(
+            status_bar, mode="indeterminate", length=190
+        )
         self.management = ManagementFrame(
             self.main_tabs,
             lambda: self.settings,
@@ -1031,20 +1103,57 @@ class TokenAdmin(tk.Tk):
         self.server_button.configure(text=f"https://{self.settings.server_address}{port}")
 
     def refresh(self):
-        self.status.configure(text="Сканирование токенов…")
-        self.update_idletasks()
-        try:
-            self.tokens, warnings = scan_inventory()
-        except Exception as exc:
-            self.tokens = []
-            self.status.configure(text=f"Ошибка: {exc}")
-            self._fill_table()
+        if self._scan_in_progress:
+            self._scan_again = True
+            self.status.configure(
+                text="Чтение токенов и сертификатов уже выполняется…"
+            )
             return
-        self._fill_table()
-        ready = sum(token.state == "READY" for token in self.tokens)
-        empty = sum(token.state == "EMPTY" for token in self.tokens)
-        suffix = f" · {'; '.join(warnings)}" if warnings else ""
-        self.status.configure(text=f"Подключено токенов: {ready} · пустых считывателей: {empty}{suffix}")
+        self._scan_in_progress = True
+        self._scan_again = False
+        self.status.configure(text="Чтение токенов и сертификатов… Подожди.")
+        self.refresh_action.configure(state="disabled")
+        self.scan_progress.pack(side="right", padx=(12, 0))
+        self.scan_progress.start(12)
+        self.configure(cursor="wait")
+
+        def worker():
+            try:
+                self._scan_results.put((True, scan_inventory()))
+            except Exception as exc:
+                LOG.exception("Inventory worker failed: %s", exc)
+                self._scan_results.put((False, exc))
+
+        threading.Thread(target=worker, name="token-inventory", daemon=True).start()
+        self.after(100, self._poll_scan_result)
+
+    def _poll_scan_result(self):
+        try:
+            success, payload = self._scan_results.get_nowait()
+        except queue.Empty:
+            self.after(100, self._poll_scan_result)
+            return
+
+        self.scan_progress.stop()
+        self.scan_progress.pack_forget()
+        self.refresh_action.configure(state="normal")
+        self.configure(cursor="")
+        self._scan_in_progress = False
+        if not success:
+            self.tokens = []
+            self.status.configure(text=f"Ошибка чтения токенов: {payload}")
+            self._fill_table()
+        else:
+            self.tokens, warnings = payload
+            self._fill_table()
+            ready = sum(token.state == "READY" for token in self.tokens)
+            empty = sum(token.state == "EMPTY" for token in self.tokens)
+            suffix = f" · {'; '.join(warnings)}" if warnings else ""
+            self.status.configure(
+                text=f"Подключено токенов: {ready} · пустых считывателей: {empty}{suffix}"
+            )
+        if self._scan_again:
+            self.after_idle(self.refresh)
 
     def _visible_tokens(self):
         return self.tokens if self.show_empty.get() else [token for token in self.tokens if token.state == "READY"]

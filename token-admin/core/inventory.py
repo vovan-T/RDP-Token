@@ -1,13 +1,39 @@
+import time
+
 from adapters.pcsc import scan_tokens
 from adapters.pkcs11_inventory import read_rutoken_objects, read_rutoken_slots
 from adapters.vendor_cli import read_esmart_details, read_rutoken_details
 from adapters.windows_cert_inventory import read_windows_rutoken_objects
+from core.diagnostics import logger
 
 
-def _read_safely(reader):
+LOG = logger()
+
+
+def _result_size(value):
+    if isinstance(value, dict):
+        return f"groups={len(value)} objects={sum(len(item) for item in value.values())}"
     try:
-        return reader(), ""
+        return f"items={len(value)}"
+    except TypeError:
+        return f"type={type(value).__name__}"
+
+
+def _read_safely(stage, reader):
+    started = time.monotonic()
+    LOG.info("Inventory stage start: %s", stage)
+    try:
+        value = reader()
+        LOG.info(
+            "Inventory stage done: %s duration=%.2fs %s",
+            stage, time.monotonic() - started, _result_size(value),
+        )
+        return value, ""
     except Exception as exc:
+        LOG.exception(
+            "Inventory stage failed: %s duration=%.2fs error=%s",
+            stage, time.monotonic() - started, exc,
+        )
         return [], str(exc)
 
 
@@ -73,12 +99,14 @@ def _enrich_pkcs11_context(objects):
 
 
 def scan_inventory():
-    tokens = scan_tokens()
-    rutokens, rutoken_error = _read_safely(read_rutoken_details)
-    rutoken_slots, rutoken_slots_error = _read_safely(read_rutoken_slots)
-    rutoken_objects, rutoken_objects_error = _read_safely(read_rutoken_objects)
-    windows_objects, windows_objects_error = _read_safely(read_windows_rutoken_objects)
-    esmarts, esmart_error = _read_safely(read_esmart_details)
+    started = time.monotonic()
+    LOG.info("Inventory scan start")
+    tokens, pcsc_error = _read_safely("PC/SC readers", scan_tokens)
+    rutokens, rutoken_error = _read_safely("Rutoken control utility", read_rutoken_details)
+    rutoken_slots, rutoken_slots_error = _read_safely("Rutoken PKCS#11 slots", read_rutoken_slots)
+    rutoken_objects, rutoken_objects_error = _read_safely("Rutoken PKCS#11 objects", read_rutoken_objects)
+    windows_objects, windows_objects_error = _read_safely("Windows CSP/KSP certificates", read_windows_rutoken_objects)
+    esmarts, esmart_error = _read_safely("ESMART PKCS#11", read_esmart_details)
     for token in (item for item in tokens if item.state == "READY" and item.vendor == "Aktiv"):
         slot = next((item for item in rutoken_slots if item.get("reader") == token.reader), None)
         if not slot:
@@ -96,13 +124,22 @@ def scan_inventory():
             if isinstance(rutoken_objects, dict) else []
         token_windows_objects = next((windows_objects[item] for item in aliases if item in windows_objects), []) \
             if isinstance(windows_objects, dict) else []
+        if not token_windows_objects and isinstance(windows_objects, dict):
+            token_windows_objects = windows_objects.get(f"reader:{token.reader}", [])
         _merge_windows_objects(token.objects, token_windows_objects)
         _enrich_pkcs11_context(token.objects)
+        LOG.info(
+            "Rutoken merged reader=%r model=%r serial_suffix=%s objects=%d pkcs11=%d windows=%d",
+            token.reader, token.model, str(token.serial)[-4:], len(token.objects),
+            len(token.objects) - len(token_windows_objects), len(token_windows_objects),
+        )
     for token in (item for item in tokens if item.state == "READY" and item.vendor == "ISBC"):
         details = next((item for item in esmarts if item.get("reader") == token.reader), None)
         if details:
             _merge(token, details)
     warnings = []
+    if pcsc_error:
+        warnings.append(f"PC/SC: {pcsc_error}")
     if rutoken_error:
         warnings.append(f"Rutoken: {rutoken_error}")
     if rutoken_slots_error:
@@ -113,4 +150,9 @@ def scan_inventory():
         warnings.append(f"Windows CSP/KSP: {windows_objects_error}")
     if esmart_error:
         warnings.append(f"ESMART: {esmart_error}")
+    LOG.info(
+        "Inventory scan done duration=%.2fs readers=%d ready=%d warnings=%d",
+        time.monotonic() - started, len(tokens),
+        sum(token.state == "READY" for token in tokens), len(warnings),
+    )
     return tokens, warnings

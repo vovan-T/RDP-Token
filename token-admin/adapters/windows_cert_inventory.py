@@ -5,7 +5,11 @@ import platform
 import re
 
 from core.certificate_fields import name_fields
+from core.diagnostics import logger
 from ctypes import wintypes
+
+
+LOG = logger()
 
 try:
     from cryptography import x509
@@ -17,6 +21,9 @@ except ImportError:
 CERT_KEY_PROV_INFO_PROP_ID = 2
 PP_UNIQUE_CONTAINER = 36
 CRYPT_SILENT = 0x40
+NCRYPT_SILENT_FLAG = 0x40
+NCRYPT_READER_PROPERTY = "SmartCardReader"
+PP_SMARTCARD_READER = 43
 
 PUBLIC_KEY_NAMES = {
     "1.2.840.113549.1.1.1": "RSA",
@@ -92,11 +99,26 @@ def _provider_info(crypt32, context):
             context, CERT_KEY_PROV_INFO_PROP_ID, buffer, ctypes.byref(size)):
         return None
     info = ctypes.cast(buffer, ctypes.POINTER(CRYPT_KEY_PROV_INFO)).contents
+    reader = ""
+    parameter_ids = []
+    if info.rgProvParam:
+        for index in range(int(info.cProvParam)):
+            parameter = info.rgProvParam[index]
+            parameter_ids.append(int(parameter.dwParam))
+            if parameter.dwParam != PP_SMARTCARD_READER or not parameter.pbData:
+                continue
+            raw = bytes(parameter.pbData[:parameter.cbData]).rstrip(b"\0")
+            if b"\0" in raw:
+                reader = raw.decode("utf-16-le", errors="replace").rstrip("\0")
+            else:
+                reader = raw.decode("mbcs", errors="replace")
     return {
         "container": info.pwszContainerName or "",
         "provider": info.pwszProvName or "",
         "provider_type": int(info.dwProvType),
         "key_spec": int(info.dwKeySpec),
+        "reader": reader,
+        "parameter_ids": parameter_ids,
     }
 
 
@@ -122,6 +144,55 @@ def _unique_container(advapi32, provider_info: dict) -> str:
         return raw.decode("mbcs", errors="replace")
     finally:
         advapi32.CryptReleaseContext(handle, 0)
+
+
+def _ncrypt_text_property(ncrypt, handle, name: str) -> str:
+    size = wintypes.DWORD()
+    status = ncrypt.NCryptGetProperty(
+        handle, name, None, 0, ctypes.byref(size), 0
+    )
+    if status != 0 or not size.value:
+        return ""
+    buffer = (ctypes.c_ubyte * size.value)()
+    status = ncrypt.NCryptGetProperty(
+        handle, name, buffer, size.value, ctypes.byref(size), 0
+    )
+    if status != 0:
+        return ""
+    return bytes(buffer[:size.value]).decode("utf-16-le", errors="replace").rstrip("\0")
+
+
+def _ksp_reader(ncrypt, provider_info: dict) -> str:
+    if provider_info.get("provider_type") != 0:
+        return ""
+    provider = ctypes.c_void_p()
+    status = ncrypt.NCryptOpenStorageProvider(
+        ctypes.byref(provider), provider_info.get("provider"), 0
+    )
+    if status != 0:
+        LOG.info(
+            "NCrypt provider open failed: provider=%r status=0x%08X",
+            provider_info.get("provider"), status & 0xFFFFFFFF,
+        )
+        return ""
+    key = ctypes.c_void_p()
+    try:
+        status = ncrypt.NCryptOpenKey(
+            provider, ctypes.byref(key), provider_info.get("container"),
+            0, NCRYPT_SILENT_FLAG,
+        )
+        if status != 0:
+            LOG.info(
+                "NCrypt key open failed: provider=%r container=%r status=0x%08X",
+                provider_info.get("provider"), provider_info.get("container"),
+                status & 0xFFFFFFFF,
+            )
+            return ""
+        return _ncrypt_text_property(ncrypt, key, NCRYPT_READER_PROPERTY).strip()
+    finally:
+        if key.value:
+            ncrypt.NCryptFreeObject(key)
+        ncrypt.NCryptFreeObject(provider)
 
 
 def _rutoken_serial(unique_container: str) -> str:
@@ -171,6 +242,7 @@ def read_windows_rutoken_objects() -> dict[str, list[dict]]:
 
     crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    ncrypt = ctypes.WinDLL("ncrypt", use_last_error=True)
     crypt32.CertOpenSystemStoreW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
     crypt32.CertOpenSystemStoreW.restype = ctypes.c_void_p
     crypt32.CertEnumCertificatesInStore.argtypes = [ctypes.c_void_p,
@@ -190,11 +262,27 @@ def read_windows_rutoken_objects() -> dict[str, list[dict]]:
     advapi32.CryptGetProvParam.restype = wintypes.BOOL
     advapi32.CryptReleaseContext.argtypes = [ctypes.c_void_p, wintypes.DWORD]
     advapi32.CryptReleaseContext.restype = wintypes.BOOL
+    ncrypt.NCryptOpenStorageProvider.argtypes = [ctypes.POINTER(ctypes.c_void_p),
+                                                  wintypes.LPCWSTR, wintypes.DWORD]
+    ncrypt.NCryptOpenStorageProvider.restype = wintypes.LONG
+    ncrypt.NCryptOpenKey.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                                     wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+    ncrypt.NCryptOpenKey.restype = wintypes.LONG
+    ncrypt.NCryptGetProperty.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_void_p,
+                                         wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                                         wintypes.DWORD]
+    ncrypt.NCryptGetProperty.restype = wintypes.LONG
+    ncrypt.NCryptFreeObject.argtypes = [ctypes.c_void_p]
+    ncrypt.NCryptFreeObject.restype = wintypes.LONG
 
     store = crypt32.CertOpenSystemStoreW(None, "MY")
     if not store:
         raise OSError(ctypes.get_last_error(), "Не удалось открыть CurrentUser\\MY")
     result = {}
+    enumerated = 0
+    with_provider = 0
+    matched = 0
+    parse_errors = 0
     previous = None
     try:
         while True:
@@ -202,18 +290,39 @@ def read_windows_rutoken_objects() -> dict[str, list[dict]]:
             if not context:
                 break
             previous = context
+            enumerated += 1
             provider_info = _provider_info(crypt32, context)
             if not provider_info:
                 continue
+            with_provider += 1
             unique = _unique_container(advapi32, provider_info)
+            reader = provider_info.get("reader") or _ksp_reader(ncrypt, provider_info)
             serial = _rutoken_serial(unique)
-            if not serial:
+            if not serial and not reader:
+                LOG.info(
+                    "Windows certificate skipped: provider=%r container=%r unique=%r reason=no-token-identity",
+                    provider_info.get("provider"), provider_info.get("container"), unique,
+                )
+                LOG.info(
+                    "Windows provider parameters: provider=%r ids=%s",
+                    provider_info.get("provider"), provider_info.get("parameter_ids"),
+                )
                 continue
+            matched += 1
+            LOG.info(
+                "Windows certificate matched: provider=%r reader=%r serial_suffix=%s",
+                provider_info.get("provider"), reader, serial[-4:],
+            )
             encoded = ctypes.string_at(context.contents.pbCertEncoded,
                                        context.contents.cbCertEncoded)
             try:
                 details = _certificate_details(encoded, provider_info, unique)
-            except Exception:
+            except Exception as exc:
+                parse_errors += 1
+                LOG.exception(
+                    "Windows certificate parse failed: provider=%r serial_suffix=%s error=%s",
+                    provider_info.get("provider"), serial[-4:], exc,
+                )
                 continue
             if not details:
                 continue
@@ -234,8 +343,15 @@ def read_windows_rutoken_objects() -> dict[str, list[dict]]:
                 "unique_container": details["unique_container"],
                 "source": details["source"],
             }
-            for alias in _serial_aliases(serial):
+            aliases = _serial_aliases(serial) if serial else set()
+            if reader:
+                aliases.add(f"reader:{reader}")
+            for alias in aliases:
                 result.setdefault(alias, []).extend((public_key, certificate))
     finally:
         crypt32.CertCloseStore(store, 0)
+    LOG.info(
+        "Windows MY inventory: enumerated=%d with_provider=%d rutoken_matched=%d parse_errors=%d groups=%d",
+        enumerated, with_provider, matched, parse_errors, len(result),
+    )
     return result

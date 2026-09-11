@@ -80,3 +80,11 @@ does not bundle any vendor binaries. If needed for your own authorized deploymen
 place vendor files in `dist\lib\` according to vendor/README.md. Review
 redistribution terms before sharing them. This preview does not provide signed
 installers or claim that every token works without driver installation.
+
+## Diagnostic log
+
+The `Журнал` button in the bottom status bar opens an in-application viewer.
+The complete rotating log is stored at
+`%LOCALAPPDATA%\RDP-Token\logs\manager.log`. It records the PC/SC, PKCS#11,
+Windows CSP/KSP and ESMART inventory stages, their duration and errors. It does
+not record PINs, private keys, full certificate contents or recovery codes.

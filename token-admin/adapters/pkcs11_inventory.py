@@ -4,7 +4,11 @@ import platform
 from pathlib import Path
 
 from core.certificate_fields import name_fields
+from core.diagnostics import logger
 from adapters.tool_paths import lib_file
+
+
+LOG = logger()
 
 try:
     from cryptography import x509
@@ -267,6 +271,7 @@ def read_rutoken_slots() -> list[dict]:
 
 
 def _read_rutoken_objects_from(module: Path) -> dict[str, list[dict]]:
+    LOG.info("PKCS#11 module open: %s", module)
     library = ctypes.CDLL(str(module))
     get_list = library.C_GetFunctionList
     get_list.argtypes = [ctypes.POINTER(ctypes.POINTER(CK_FUNCTION_LIST))]
@@ -352,6 +357,10 @@ def _read_rutoken_objects_from(module: Path) -> dict[str, list[dict]]:
                     find_final(session.value)
             finally:
                 close_session(session.value)
+            LOG.info(
+                "PKCS#11 slot read: module=%s slot=%s serial_suffix=%s objects=%d",
+                module.name, int(slot), serial[-4:], len(slot_objects),
+            )
     finally:
         if initialized_here:
             finalize(None)
@@ -366,10 +375,12 @@ def read_rutoken_objects() -> dict[str, list[dict]]:
     merged = {}
     for module in modules:
         if not module.is_file():
+            LOG.info("PKCS#11 module absent: %s", module)
             continue
         try:
             current = _read_rutoken_objects_from(module)
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError) as exc:
+            LOG.exception("PKCS#11 module failed: %s error=%s", module, exc)
             continue
         for serial, objects in current.items():
             destination = merged.setdefault(serial, [])
