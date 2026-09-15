@@ -856,6 +856,8 @@ class TokenAdmin(tk.Tk):
             ("Модель", getattr(token, "model", "")),
             ("Серийный номер", getattr(token, "serial", "")),
             ("Считыватель", getattr(token, "reader", "")),
+            ("PKCS#11-провайдер", getattr(token, "provider_name", "") or "Не выбран"),
+            ("Модуль PKCS#11", getattr(token, "provider_path", "") or "—"),
             ("ATR", getattr(token, "atr", "")),
             ("Память, свободно / всего", getattr(token, "memory", "")),
             ("Попытки PIN, осталось / всего", getattr(token, "user_pin_attempts", "")),
@@ -1078,7 +1080,10 @@ class TokenAdmin(tk.Tk):
         self.status.configure(text=f"Проверка PIN: {token.label or token.model}…")
         self.update_idletasks()
         try:
-            verify_user_pin(token.vendor, token.serial, pin)
+            verify_user_pin(
+                token.vendor, token.serial, pin,
+                token.provider_id, token.provider_path,
+            )
         except Exception as exc:
             messagebox.showerror("Проверка PIN", str(exc), parent=self)
             self.refresh()
@@ -1194,13 +1199,20 @@ class TokenAdmin(tk.Tk):
     def _show_token(self, token):
         self.selected_token = token
         self.right_panel.configure(text=(token.label or token.model or "Выбранный токен") if token else "Выбранный токен")
-        self.pin_action.configure(state="normal" if token and token.state == "READY" else "disabled")
-        state = "normal" if token and token.state == "READY" else "disabled"
+        ready = bool(token and token.state == "READY")
+        pin_supported = ready and bool(token.provider_path or token.vendor in ("Aktiv", "ISBC"))
+        native_write = ready and (
+            (token.vendor == "Aktiv" and token.provider_id in ("", "rutoken"))
+            or (token.vendor == "ISBC" and token.provider_id in ("", "esmart"))
+        )
+        self.pin_action.configure(state="normal" if pin_supported else "disabled")
+        state = "normal" if native_write else "disabled"
         self.request_action.configure(state=state)
         self.install_action.configure(state=state)
         self.change_pin_action.configure(state=state)
-        self.rename_action.configure(state="normal" if token and token.state == "READY" else "disabled")
-        if token and token.state == "READY" and token.vendor == "Aktiv":
+        self.rename_action.configure(
+            state="normal" if native_write and token.vendor == "Aktiv" else "disabled")
+        if native_write and token.vendor == "Aktiv":
             self.initialize_action.pack_forget()
             if not self.format_action.winfo_manager():
                 self.format_action.pack(side="left", padx=(7, 0))

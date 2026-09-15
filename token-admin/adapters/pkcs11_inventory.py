@@ -5,6 +5,7 @@ from pathlib import Path
 
 from core.certificate_fields import name_fields
 from core.diagnostics import logger
+from adapters.provider_registry import provider_by_id
 from adapters.tool_paths import lib_file
 
 
@@ -215,10 +216,10 @@ def _select_slot(table, expected_serial: str):
     raise RuntimeError(f"Не найден выбранный токен {expected_serial}. Доступны: {visible}")
 
 
-def read_rutoken_slots() -> list[dict]:
+def read_provider_slots(module: Path) -> list[dict]:
     if platform.system() != "Windows":
         return []
-    module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
+    LOG.info("PKCS#11 slot inventory: %s", module)
     library = ctypes.CDLL(str(module))
     get_list = library.C_GetFunctionList
     get_list.argtypes = [ctypes.POINTER(ctypes.POINTER(CK_FUNCTION_LIST))]
@@ -263,11 +264,20 @@ def read_rutoken_slots() -> list[dict]:
                     "utf-8", errors="replace").strip(" \0"),
                 "model": bytes(token_info.model).decode(
                     "utf-8", errors="replace").strip(" \0"),
+                "manufacturer": bytes(token_info.manufacturerID).decode(
+                    "utf-8", errors="replace").strip(" \0"),
             })
         return result
     finally:
         if initialized_here:
             finalize(None)
+
+
+def read_rutoken_slots() -> list[dict]:
+    if platform.system() != "Windows":
+        return []
+    module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
+    return read_provider_slots(module)
 
 
 def _read_rutoken_objects_from(module: Path) -> dict[str, list[dict]]:
@@ -394,18 +404,36 @@ def read_rutoken_objects() -> dict[str, list[dict]]:
     return merged
 
 
-def verify_user_pin(vendor: str, serial: str, pin: str) -> None:
+def read_provider_objects(module: Path) -> dict[str, list[dict]]:
+    """Read public object metadata from one explicitly selected provider."""
+    if platform.system() != "Windows":
+        return {}
+    return _read_rutoken_objects_from(module)
+
+
+def _operation_module(vendor: str, provider_id: str = "", provider_path: str = "") -> Path:
+    if provider_path:
+        module = Path(provider_path)
+        if module.is_file():
+            return module
+    if provider_id:
+        selected = provider_by_id(provider_id)
+        if selected:
+            return selected[1]
+    if vendor == "Aktiv":
+        return lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
+    if vendor == "ISBC":
+        return lib_file("isbc_pkcs11_main.dll", "isbc_pkcs11_main.dll")
+    raise RuntimeError(f"Для {vendor} не выбран доступный PKCS#11-провайдер")
+
+
+def verify_user_pin(vendor: str, serial: str, pin: str,
+                    provider_id: str = "", provider_path: str = "") -> None:
     if platform.system() != "Windows":
         raise RuntimeError("Проверка PIN сейчас поддерживается только в Windows")
-    if vendor == "Aktiv":
-        module = lib_file("rtpkcs11ecp.dll", "rtPKCS11ECP.dll")
-    elif vendor == "ISBC":
-        system_module = lib_file("isbc_pkcs11_main.dll", "isbc_pkcs11_main.dll")
-        if not system_module.is_file():
-            raise RuntimeError("Не установлен системный PKCS#11-драйвер ESMART")
-        module = system_module
-    else:
-        raise RuntimeError(f"Проверка PIN для {vendor} пока не поддерживается")
+    module = _operation_module(vendor, provider_id, provider_path)
+    if not module.is_file():
+        raise RuntimeError(f"Не найдена библиотека PKCS#11: {module.name}")
 
     library = ctypes.CDLL(str(module))
     get_list = library.C_GetFunctionList

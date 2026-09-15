@@ -25,12 +25,15 @@ exports are written locally; this application is not entirely stateless.
   depending on the actual model, installed providers and vendor tools.
 - ESMART: PC/SC, vendor CLI/PKCS#11 and Windows certificate operations depending
   on the device and installed runtime.
-- Other PC/SC devices: inventory; Windows KSP fallback only where a compatible
-  provider is actually available. Generic compatibility is not promised.
+- OpenSC-compatible devices: inventory and one explicit PIN check through the
+  optional universal provider pack.
+- YubiKey, Nitrokey, FEITIAN, JaCarta, SafeNet/eToken and SmartCard-HSM: the
+  matching native provider is preferred when present; OpenSC is the fallback.
 
 Driver/runtime binaries are **not included** in the public release. See
 [vendor/README.md](vendor/README.md) for their sources and licensing boundary.
-The current portable layout is one flat `lib` directory beside the EXE; source
+Provider DLLs live under `lib/providers/<provider-id>` beside the EXE; the
+existing Rutoken/ESMART utilities remain in the flat `lib` directory. Source
 runs use `token-admin/lib`. A source-only installation can show missing-tool
 errors until those prerequisites are supplied. Remote USB passthrough to the
 Docker gateway is not required.
@@ -102,6 +105,19 @@ To perform exactly one masked PIN check per supported token:
 
 ```powershell
 .\RDP-Token-Manager.exe --test-tokens
+```
+
+To check which provider packs are visible without opening any token:
+
+```powershell
+.\RDP-Token-Manager.exe --providers
+```
+
+To actually load every detected module and enumerate slots without requesting
+a PIN or changing a token:
+
+```powershell
+.\RDP-Token-Manager.exe --test-providers --report provider-test.json
 ```
 
 PIN values are requested in separate protected dialogs. They cannot be passed

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.3 — 2026-09-15
+
+- Added ordered provider packs for Rutoken, ESMART, Yubico, SmartCard-HSM,
+  FEITIAN, JaCarta, SafeNet/eToken and OpenSC.
+- The client opens only the first provider that matches a physical PC/SC reader;
+  OpenSC is a final fallback, preventing duplicate token rows.
+- Added `--providers` and provider details to sanitized diagnostics.
+- Generic providers are read-only except for one explicit PIN verification;
+  destructive operations remain limited to tested native Rutoken/ESMART paths.
+
 ## 0.7.2 — 2026-09-15
 
 - Added `--diagnose` for sanitized command-driven token inventory reports.

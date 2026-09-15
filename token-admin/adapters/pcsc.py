@@ -26,13 +26,23 @@ def _library():
     raise RuntimeError("PC/SC library is not installed")
 
 
-def _classify(atr: bytes):
+def _classify(atr: bytes, reader: str = ""):
     text = "".join(chr(value) if 32 <= value <= 126 else "." for value in atr)
-    upper = text.upper()
+    upper = f"{text} {reader}".upper()
     if "ESMARTGOST" in upper:
         return "ISBC", "ESMART Token GOST"
     if "RUTOKEN" in upper or "RUTOKN" in upper or "RTMC" in upper or "RTSC" in upper:
         return "Aktiv", "Rutoken"
+    if "YUBICO" in upper or "YUBIKEY" in upper:
+        return "Yubico", "YubiKey"
+    if "FEITIAN" in upper or "EPASS" in upper:
+        return "FEITIAN", "ePass"
+    if "JACARTA" in upper or "ALADDIN" in upper:
+        return "Aladdin", "JaCarta"
+    if any(name in upper for name in ("SAFENET", "ETOKEN", "IDPRIME", "GEMALTO", "THALES")):
+        return "Thales", "SafeNet/eToken"
+    if any(name in upper for name in ("SMARTCARD-HSM", "SC-HSM", "STARCOS")):
+        return "CardContact", "SmartCard-HSM"
     return "Не определён", text.strip(".") or "Смарт-карта"
 
 
@@ -79,7 +89,7 @@ def scan_tokens():
                                           byref(active_protocol), atr, byref(atr_len))
                 _check(status, "SCardStatus")
                 atr_bytes = bytes(atr[:atr_len.value])
-                vendor, model = _classify(atr_bytes)
+                vendor, model = _classify(atr_bytes, reader)
                 found.append(TokenInfo(reader, atr_bytes.hex(" ").upper(), vendor, model, "READY"))
             finally:
                 lib.SCardDisconnect(card, SCARD_LEAVE_CARD)

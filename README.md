@@ -100,7 +100,7 @@ Windows desktop behavior require separate client testing.
 
 ## Release status
 
-`v0.7.2` packages the current laboratory implementation. Deployment-specific
+`v0.7.3` packages the current laboratory implementation. Deployment-specific
 defaults are replaced with examples; the tested grant/relay logic is retained.
 The desktop client adds portable public token cards, CRL controls, signed
 administrator challenges and background inventory with a local diagnostic log.
@@ -108,6 +108,8 @@ The Ubuntu archive contains a guarded fresh-install
 script. Windows installer signing, driver redistribution and full Linux Manager
 feature parity are not part of this release. The desktop executable also provides
 sanitized command-line inventory and one-attempt interactive PIN diagnostics.
+Version 0.7.3 adds ordered native PKCS#11 provider discovery for common token
+families, with OpenSC as the final read-only fallback, plus provider load tests.
 No general open-source license is
 selected yet; public visibility is not a grant of redistribution rights beyond
 applicable platform terms.

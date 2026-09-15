@@ -7,7 +7,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from adapters.pkcs11_inventory import verify_user_pin
+from adapters.pkcs11_inventory import read_provider_slots, verify_user_pin
+from adapters.provider_registry import provider_status
 from core.diagnostics import log_path, logger
 from core.inventory import scan_inventory
 from core.version import APP_NAME, APP_VERSION
@@ -72,6 +73,9 @@ def _token_record(token) -> dict:
         "admin_pin_attempts": token.admin_pin_attempts,
         "memory": token.memory,
         "slot_id": token.slot_id,
+        "provider_id": getattr(token, "provider_id", ""),
+        "provider_name": getattr(token, "provider_name", ""),
+        "provider_path": getattr(token, "provider_path", ""),
         "key_options": list(token.key_options),
         "objects": [_safe_object(item) for item in token.objects],
         "pin_test": "not_requested",
@@ -123,7 +127,7 @@ def _run_pin_tests(tokens, records) -> bool:
             if token.state != "READY":
                 record["pin_test"] = "not_ready"
                 continue
-            if token.vendor not in ("Aktiv", "ISBC"):
+            if not token.provider_path and token.vendor not in ("Aktiv", "ISBC"):
                 record["pin_test"] = "unsupported"
                 continue
             name = token.label or token.model or token.reader
@@ -136,7 +140,10 @@ def _run_pin_tests(tokens, records) -> bool:
                 failed = True
                 continue
             try:
-                verify_user_pin(token.vendor, token.serial, pin)
+                verify_user_pin(
+                    token.vendor, token.serial, pin,
+                    token.provider_id, token.provider_path,
+                )
             except Exception as exc:
                 record["pin_test"] = "failed"
                 record["pin_error"] = str(exc)
@@ -158,6 +165,9 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--diagnose", action="store_true", help="read tokens without PIN")
     mode.add_argument("--test-tokens", action="store_true", help="read tokens and test PIN once")
     mode.add_argument("--version", action="store_true", help="print application version")
+    mode.add_argument("--providers", action="store_true", help="list detected provider packs")
+    mode.add_argument("--test-providers", action="store_true",
+                      help="load provider packs and enumerate slots without PIN")
     parser.add_argument("--report", metavar="FILE", help="diagnostic JSON destination")
     parser.add_argument("--quiet", action="store_true", help="do not show the final dialog")
     return parser
@@ -171,6 +181,47 @@ def main(arguments=None) -> int:
             print(f"{APP_NAME} {APP_VERSION}")
         return 0
 
+    if args.providers:
+        providers = provider_status()
+        if sys.stdout is not None:
+            for item in providers:
+                state = item["module"] if item["installed"] else "не найден"
+                print(f"{item['id']}: {state}")
+        return 0
+
+    if args.test_providers:
+        providers = provider_status()
+        failed = False
+        for item in providers:
+            if not item["installed"]:
+                item["load_test"] = "not_installed"
+                continue
+            try:
+                slots = read_provider_slots(Path(item["module"]))
+            except Exception as exc:
+                item["load_test"] = "failed"
+                item["error"] = str(exc)
+                item["slots"] = 0
+                failed = True
+            else:
+                item["load_test"] = "ok"
+                item["slots"] = len(slots)
+        report_path = _report_path(args.report)
+        payload = {
+            "schema": "rdp-token-provider-test/v1",
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "application": {"name": APP_NAME, "version": APP_VERSION},
+            "providers": providers,
+        }
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        message = f"Проверено провайдеров: {sum(item['installed'] for item in providers)}\nОтчёт: {report_path}"
+        if sys.stdout is not None:
+            print(message)
+        if not args.quiet:
+            _show_result(message, failed)
+        return 1 if failed else 0
+
     report_path = _report_path(args.report)
     LOG.info("Command diagnostic start mode=%s", "pin-test" if args.test_tokens else "inventory")
     tokens, warnings = scan_inventory()
@@ -183,6 +234,7 @@ def main(arguments=None) -> int:
         "host": {"os": platform.system(), "release": platform.release(), "python": platform.python_version()},
         "log_file": str(log_path()),
         "warnings": warnings,
+        "providers": provider_status(),
         "tokens": records,
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)

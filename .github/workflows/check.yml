@@ -22,4 +22,5 @@ jobs:
         run: |
           docker run --rm --network none --read-only --tmpfs /tmp:size=32m \
             -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/src \
-            -v "$PWD:/src:ro" -w /src rdp-token-check python tests/test_diagnostic_cli.py
+            -v "$PWD:/src:ro" -w /src rdp-token-check sh -c \
+            'python tests/test_provider_registry.py && python tests/test_diagnostic_cli.py'
