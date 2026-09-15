@@ -10,9 +10,10 @@ LOGGER_NAME = "rdp_token"
 
 
 def log_path() -> Path:
-    base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
-    if base:
-        return Path(base) / "RDP-Token" / "logs" / "manager.log"
+    if os.name == "nt":
+        base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
+        if base:
+            return Path(base) / "RDP-Token" / "logs" / "manager.log"
     return Path.home() / ".rdp-token" / "logs" / "manager.log"
 
 

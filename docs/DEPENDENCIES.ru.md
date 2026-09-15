@@ -39,8 +39,8 @@ sudo apt install openssl ca-certificates vim
 Установка приложения из релизного архива:
 
 ```sh
-tar -xzf RDP-Token-Ubuntu-0.7.0.tar.gz
-cd RDP-Token-Ubuntu-0.7.0
+tar -xzf RDP-Token-Ubuntu-0.7.2.tar.gz
+cd RDP-Token-Ubuntu-0.7.2
 sudo sh scripts/install-ubuntu.sh
 ```
 

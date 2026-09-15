@@ -88,3 +88,23 @@ The complete rotating log is stored at
 `%LOCALAPPDATA%\RDP-Token\logs\manager.log`. It records the PC/SC, PKCS#11,
 Windows CSP/KSP and ESMART inventory stages, their duration and errors. It does
 not record PINs, private keys, full certificate contents or recovery codes.
+
+## Command diagnostics
+
+The same executable can create a sanitized JSON report without opening the
+main window:
+
+```powershell
+.\RDP-Token-Manager.exe --diagnose
+```
+
+To perform exactly one masked PIN check per supported token:
+
+```powershell
+.\RDP-Token-Manager.exe --test-tokens
+```
+
+PIN values are requested in separate protected dialogs. They cannot be passed
+as command-line arguments and are not written to the report or diagnostic log.
+Use `--report C:\path\report.json` to choose the output file and `--quiet` to
+suppress the final completion dialog.

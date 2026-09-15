@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2 — 2026-09-15
+
+- Added `--diagnose` for sanitized command-driven token inventory reports.
+- Added `--test-tokens` for a single masked PIN check per supported token.
+- Diagnostic reports exclude PINs, private keys and complete certificate bodies.
+
 ## 0.7.1 — 2026-09-09
 
 - Token and certificate inventory now runs outside the Tk GUI thread.

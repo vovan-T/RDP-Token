@@ -16,5 +16,10 @@ jobs:
       - name: Isolated gateway tests
         run: |
           docker run --rm --network none --read-only --tmpfs /tmp:size=32m \
-            -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/src \
+            -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/src \
             -v "$PWD:/src:ro" -w /src rdp-token-check sh scripts/test.sh
+      - name: Desktop diagnostic tests
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp:size=32m \
+            -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/src \
+            -v "$PWD:/src:ro" -w /src rdp-token-check python tests/test_diagnostic_cli.py

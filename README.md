@@ -58,8 +58,8 @@ scripts do not install software or change firewall rules.
 For a fresh Ubuntu installation from the release package:
 
 ```sh
-tar -xzf RDP-Token-Ubuntu-0.7.0.tar.gz
-cd RDP-Token-Ubuntu-0.7.0
+tar -xzf RDP-Token-Ubuntu-0.7.2.tar.gz
+cd RDP-Token-Ubuntu-0.7.2
 sudo sh scripts/install-ubuntu.sh
 ```
 
@@ -100,13 +100,15 @@ Windows desktop behavior require separate client testing.
 
 ## Release status
 
-`v0.7.1` packages the current laboratory implementation. Deployment-specific
+`v0.7.2` packages the current laboratory implementation. Deployment-specific
 defaults are replaced with examples; the tested grant/relay logic is retained.
 The desktop client adds portable public token cards, CRL controls, signed
 administrator challenges and background inventory with a local diagnostic log.
 The Ubuntu archive contains a guarded fresh-install
 script. Windows installer signing, driver redistribution and full Linux Manager
-feature parity are not part of this release. No general open-source license is
+feature parity are not part of this release. The desktop executable also provides
+sanitized command-line inventory and one-attempt interactive PIN diagnostics.
+No general open-source license is
 selected yet; public visibility is not a grant of redistribution rights beyond
 applicable platform terms.
 
