@@ -188,14 +188,9 @@ def scan_inventory():
             )
             break
 
-        token_windows_objects = []
-        if isinstance(windows_objects, dict):
-            aliases = _serial_aliases(token.serial) if token.serial else set()
-            token_windows_objects = next(
-                (windows_objects[item] for item in aliases if item in windows_objects), [])
-            if not token_windows_objects:
-                token_windows_objects = windows_objects.get(f"reader:{token.reader}", [])
-        _merge_windows_objects(token.objects, token_windows_objects)
+        # Windows CSP/KSP certificates are inspected for diagnostics only.
+        # The UI must represent the physical token, so only objects reported
+        # by its native PKCS#11 provider are exposed for viewing or deletion.
         _enrich_pkcs11_context(token.objects)
     warnings = []
     if pcsc_error:

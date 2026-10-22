@@ -1,6 +1,6 @@
 APP_NAME = "RDP-Token Manager"
 APP_BRAND = "Vovan-T"
-APP_VERSION = "0.7.3"
+APP_VERSION = "0.7.4-dev"
 
 SUPPORTED_TOKENS = (
     "Rutoken (Aktiv): обнаружение, PIN, RSA/ГОСТ-ключи и сертификаты, RSA CSR, установка сертификата, форматирование.",

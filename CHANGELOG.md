@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.4-dev — 2026-10-21
+
+- Normalize hexadecimal Rutoken serial numbers for the vendor formatting tool;
+  preserve decimal input and reject malformed identifiers.
+- Show only native PKCS#11 token objects in the inventory. Windows CSP/KSP
+  certificates remain available to diagnostics, not token view/delete actions.
+  CSP-only containers are not supported by the object list in this version.
+- Keep object actions and the status bar visible at the minimum window size.
+- Apply the Windows application identity and icon after the UI is initialized;
+  log icon application failures.
+- Update portable packaging instructions and development version metadata.
+- Validation: source checks, provider registry, diagnostic CLI and four Rutoken
+  serial tests passed on Linux. Windows GUI and physical-token formatting were
+  not exercised; this update does not publish a new EXE or a stable release.
+
 ## 0.7.3 — 2026-09-15
 
 - Added ordered provider packs for Rutoken, ESMART, Yubico, SmartCard-HSM,

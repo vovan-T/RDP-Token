@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import platform
@@ -548,6 +549,7 @@ class TokenAdmin(tk.Tk):
         self._configure_style()
         self.icons = load_icons(self)
         self._build_ui()
+        self.after_idle(self._set_application_icon)
         self.after(120, self.refresh)
 
     def _set_application_icon(self):
@@ -558,9 +560,11 @@ class TokenAdmin(tk.Tk):
         except tk.TclError:
             self._application_icon = None
         try:
-            self.iconbitmap(default=str(assets / "token_access.ico"))
-        except tk.TclError:
-            pass
+            icon_path = str(assets / "token_access.ico")
+            self.iconbitmap(icon_path)
+            self.iconbitmap(default=icon_path)
+        except tk.TclError as exc:
+            LOG.warning("Application ICO could not be applied: %s", exc)
 
     def _configure_style(self):
         style = ttk.Style(self)
@@ -669,7 +673,9 @@ class TokenAdmin(tk.Tk):
         self.objects.pack(fill="both", expand=True)
         self.objects.bind("<<TreeviewSelect>>", self._object_selected)
         object_actions = ttk.Frame(right)
-        object_actions.pack(fill="x", pady=(7, 0))
+        # Keep object actions visible when the window is at its minimum height.
+        # The expanding tree must use only the space left above this footer.
+        object_actions.pack(side="bottom", fill="x", pady=(7, 0), before=self.objects)
         self.delete_object_action = action_button(
             object_actions, "Удалить выбранный объект", self.confirm_delete_object,
             state="disabled",
@@ -678,7 +684,9 @@ class TokenAdmin(tk.Tk):
         action_button(object_actions, "Экспорт токена...", self.export_token_card).pack(side="left")
 
         status_bar = ttk.Frame(token_page, relief="sunken", padding=(12, 6))
-        status_bar.pack(fill="x")
+        # Reserve the footer before the resizable paned area.  Otherwise the
+        # paned window can consume its height and leave only a clipped strip.
+        status_bar.pack(side="bottom", fill="x", before=content)
         self.status = ttk.Label(
             status_bar, anchor="w", text=f"ОС: {platform.system()} · ожидание сканирования"
         )
@@ -1236,4 +1244,11 @@ class TokenAdmin(tk.Tk):
 
 
 def run():
+    if os.name == "nt":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "Vovan-T.RDP-Token.Manager"
+            )
+        except (AttributeError, OSError) as exc:
+            LOG.warning("Windows AppUserModelID could not be applied: %s", exc)
     TokenAdmin().mainloop()
